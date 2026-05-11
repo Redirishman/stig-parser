@@ -1,0 +1,1 @@
+"""STIG Compliance Parser application."""

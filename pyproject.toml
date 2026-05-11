@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stig-parser"
+version = "0.1.0"
+description = "Parse XCCDF compliance scan results and produce consolidated STIG findings in Excel"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0",
+    "lxml>=5.0",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+stig-parser = "app.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

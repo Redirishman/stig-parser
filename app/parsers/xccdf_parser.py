@@ -1,0 +1,140 @@
+"""XCCDF 1.2 results parser supporting SCC, OpenSCAP, Nessus, and Evaluate-STIG."""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from lxml import etree
+
+from app.parsers.base import BaseParser, RuleResult, ScanResult
+from app.utils.scanner_detect import detect_scanner
+
+log = logging.getLogger(__name__)
+
+# XCCDF 1.2 namespace URI
+_NS_XCCDF_12 = "http://checklists.nist.gov/xccdf/1.2"
+
+# XPath helper: try both namespaced and un-namespaced forms
+_XCCDF_NS = {"cdf": _NS_XCCDF_12}
+
+
+def _find_text(root: etree._Element, *local_names: str) -> str:
+    """Return the text of the first matching element by local name, stripped.
+
+    Tries the XCCDF 1.2 namespace first, then falls back to no-namespace search.
+    Handles any prefix the scanner may have used.
+    """
+    for local in local_names:
+        # Namespaced lookup
+        el = root.find(f"cdf:{local}", _XCCDF_NS)
+        if el is not None and el.text:
+            return el.text.strip()
+        # Fallback: any-namespace search (skip comment/PI nodes which have callable tags)
+        for el in root:
+            if callable(el.tag):
+                continue
+            if etree.QName(el.tag).localname == local and el.text:
+                return el.text.strip()
+    return ""
+
+
+def _findall_results(root: etree._Element) -> list[etree._Element]:
+    """Return all <rule-result> elements regardless of namespace prefix."""
+    # Try namespaced first
+    results = root.findall("cdf:rule-result", _XCCDF_NS)
+    if results:
+        return results
+    # Fallback: iterate and match by local name (skip comment/PI nodes)
+    return [
+        el for el in root
+        if not callable(el.tag) and etree.QName(el.tag).localname == "rule-result"
+    ]
+
+
+def _find_child_text(el: etree._Element, local_name: str) -> str:
+    """Return text of a direct child element matched by local name."""
+    for child in el:
+        if callable(child.tag):
+            continue
+        if etree.QName(child.tag).localname == local_name:
+            if child.text:
+                return child.text.strip()
+    return ""
+
+
+def _get_benchmark_attrs(root: etree._Element) -> tuple[str, str]:
+    """Return (benchmark_href, benchmark_id) from the <benchmark> child element."""
+    # Try namespaced
+    bm = root.find("cdf:benchmark", _XCCDF_NS)
+    if bm is None:
+        # Fallback: match by local name (skip comment/PI nodes)
+        for el in root:
+            if callable(el.tag):
+                continue
+            if etree.QName(el.tag).localname == "benchmark":
+                bm = el
+                break
+    if bm is None:
+        return "", ""
+    href = bm.get("href", "")
+    bid = bm.get("id", "")
+    return href, bid
+
+
+class XCCDFResultsParser(BaseParser):
+    """Parse XCCDF 1.2 results files from all supported scanners."""
+
+    def parse(self, path: Path) -> ScanResult | None:
+        """Parse an XCCDF results file and return a ScanResult.
+
+        Returns None if the file cannot be parsed; logs a warning.
+        """
+        try:
+            tree = etree.parse(str(path))
+        except etree.XMLSyntaxError as exc:
+            log.warning("Skipping %s — invalid XML: %s", path.name, exc)
+            return None
+
+        root = tree.getroot()
+        scanner = detect_scanner(path)
+
+        hostname = _find_text(root, "target")
+        if not hostname:
+            hostname = path.stem
+            log.warning(
+                "%s: No <target> element found — using filename '%s' as hostname",
+                path.name,
+                hostname,
+            )
+
+        ip_address = _find_text(root, "target-address")
+        if not ip_address:
+            ip_address = "N/A"
+            log.warning("%s: No <target-address> element found — using 'N/A'", path.name)
+
+        benchmark_href, benchmark_id = _get_benchmark_attrs(root)
+
+        rule_results: list[RuleResult] = []
+        for rr_el in _findall_results(root):
+            rule_id = rr_el.get("idref", "").strip()
+            if not rule_id:
+                continue
+            status = _find_child_text(rr_el, "result")
+            if not status:
+                log.warning(
+                    "%s: rule-result '%s' has no <result> element — skipping",
+                    path.name,
+                    rule_id,
+                )
+                continue
+            rule_results.append(RuleResult(rule_id=rule_id, status=status))
+
+        return ScanResult(
+            source_file=path.name,
+            hostname=hostname,
+            ip_address=ip_address,
+            benchmark_href=benchmark_href,
+            benchmark_id=benchmark_id,
+            scanner=scanner,
+            rule_results=rule_results,
+        )

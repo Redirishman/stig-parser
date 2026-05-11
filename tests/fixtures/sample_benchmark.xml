@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated STIG Benchmark (XCCDF 1.1) fixture.
+  Represents a DISA STIG benchmark definition file as published on public.cyber.mil.
+  Covers Windows Server 2022 STIG rules referenced by the results fixtures.
+  All check and fix text is representative but synthetic.
+-->
+<Benchmark
+    xmlns="http://checklists.nist.gov/xccdf/1.1"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    id="xccdf_mil.disa.stig_benchmark_MS_Windows_Server_2022_STIG"
+    resolved="1"
+    xml:lang="en">
+
+  <status date="2023-09-28">accepted</status>
+  <title>Microsoft Windows Server 2022 Security Technical Implementation Guide</title>
+  <description>This Security Technical Implementation Guide provides security policy and configuration requirements for Microsoft Windows Server 2022.</description>
+  <version>V1R4</version>
+  <metadata>
+    <dc:publisher>DISA</dc:publisher>
+    <dc:source>STIG.DOD.MIL</dc:source>
+  </metadata>
+
+  <!-- CAT I (high) finding -->
+  <Group id="V-254239">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <description>Windows Server 2022 must use multifactor authentication for local and network access.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254239r945408_rule" severity="high" weight="10.0">
+      <version>WN22-00-000001</version>
+      <title>Windows Server 2022 must use multifactor authentication for local and network access to privileged accounts.</title>
+      <description>Without the use of multifactor authentication, the ease of access to privileged functions is greatly increased.</description>
+      <fixtext fixref="F-57626r945407_fix">Configure Windows Server 2022 to require multifactor authentication for local and network access to privileged accounts. This can be accomplished by implementing Windows Hello for Business or a PIV/CAC smart card solution.</fixtext>
+      <fix id="F-57626r945407_fix"/>
+      <check system="C-57900r945406_chk">
+        <check-content>Verify the system requires multifactor authentication for local and network access to privileged accounts.
+
+If the system does not require multifactor authentication for local and network access to privileged accounts, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <!-- CAT II (medium) finding -->
+  <Group id="V-254240">
+    <title>SRG-OS-000071-GPOS-00039</title>
+    <description>Windows Server 2022 password complexity requirements.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254240r945411_rule" severity="medium" weight="10.0">
+      <version>WN22-AC-000020</version>
+      <title>Windows Server 2022 must have the built-in Windows password complexity policy enabled.</title>
+      <description>The use of complex passwords increases their strength against attack.</description>
+      <fixtext fixref="F-57627r945410_fix">Configure the policy value for Computer Configuration >> Windows Settings >> Security Settings >> Account Policies >> Password Policy >> "Password must meet complexity requirements" to "Enabled".</fixtext>
+      <fix id="F-57627r945410_fix"/>
+      <check system="C-57901r945409_chk">
+        <check-content>Verify the effective setting in Local Group Policy Editor.
+
+Run "gpedit.msc".
+
+Navigate to Local Computer Policy >> Computer Configuration >> Windows Settings >> Security Settings >> Account Policies >> Password Policy.
+
+If the value for "Password must meet complexity requirements" is not set to "Enabled", this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <!-- CAT II (medium) - notchecked/Not Reviewed -->
+  <Group id="V-254241">
+    <title>SRG-OS-000095-GPOS-00049</title>
+    <description>Windows Server 2022 must not have Internet Information Server installed.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254241r945414_rule" severity="medium" weight="10.0">
+      <version>WN22-00-000010</version>
+      <title>Windows Server 2022 must not have Internet Information Server (IIS) installed unless required and approved.</title>
+      <description>Unnecessary services increase the attack surface of a system.</description>
+      <fixtext fixref="F-57628r945413_fix">Uninstall the IIS role from the server if it is not required. Run "Remove-WindowsFeature Web-Server" in PowerShell as Administrator.</fixtext>
+      <fix id="F-57628r945413_fix"/>
+      <check system="C-57902r945412_chk">
+        <check-content>Verify the IIS role is not installed unless required.
+
+Run the following command in PowerShell:
+Get-WindowsFeature Web-Server
+
+If the "Install State" is "Installed" and IIS is not required and documented, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <!-- CAT III (low) - error -->
+  <Group id="V-254242">
+    <title>SRG-OS-000037-GPOS-00015</title>
+    <description>Windows Server 2022 audit policy for account management.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254242r945417_rule" severity="low" weight="10.0">
+      <version>WN22-AU-000040</version>
+      <title>Windows Server 2022 must be configured to audit Account Management - Other Account Management Events successes.</title>
+      <description>Maintaining an audit trail of system activity logs can help identify configuration errors, troubleshoot service disruptions, and analyze compromises.</description>
+      <fixtext fixref="F-57629r945416_fix">Configure the policy value for Computer Configuration >> Windows Settings >> Security Settings >> Advanced Audit Policy Configuration >> System Audit Policies >> Account Management >> "Other Account Management Events" with "Success" selected.</fixtext>
+      <fix id="F-57629r945416_fix"/>
+      <check system="C-57903r945415_chk">
+        <check-content>Security Option "Audit: Force audit policy subcategory settings (Windows Vista or later) to override audit policy category settings" must be set to "Enabled" for the detailed auditing subcategories to be effective.
+
+Run "AuditPol /get /category:*" to determine if the required setting is configured.
+
+If "Other Account Management Events" does not have "Success" as the configured setting, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <!-- CAT II (medium) - unknown -->
+  <Group id="V-254243">
+    <title>SRG-OS-000480-GPOS-00228</title>
+    <description>Windows Server 2022 Windows Firewall configuration.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254243r945420_rule" severity="medium" weight="10.0">
+      <version>WN22-DC-000010</version>
+      <title>Windows Server 2022 must have the Windows Firewall enabled for all profiles.</title>
+      <description>Firewalls protect computers from network attacks by managing incoming network traffic.</description>
+      <fixtext fixref="F-57630r945419_fix">Enable the Windows Firewall for Domain, Private, and Public profiles via Group Policy or the Windows Defender Firewall with Advanced Security console.</fixtext>
+      <fix id="F-57630r945419_fix"/>
+      <check system="C-57904r945418_chk">
+        <check-content>Verify the Windows Firewall is enabled for all profiles.
+
+Run "netsh advfirewall show allprofiles"
+
+If "State" is not "ON" for each profile, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <!-- CAT III (low) - notapplicable (should be discarded by filter) -->
+  <Group id="V-254244">
+    <title>SRG-OS-000480-GPOS-00229</title>
+    <description>Windows Server 2022 screen saver timeout.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254244r945423_rule" severity="low" weight="10.0">
+      <version>WN22-CC-000005</version>
+      <title>Windows Server 2022 must have the screen saver set to password protected.</title>
+      <description>Unattended systems are susceptible to unauthorized use and should be locked when unattended.</description>
+      <fixtext fixref="F-57631r945422_fix">Configure the policy value for User Configuration >> Administrative Templates >> Control Panel >> Personalization >> "Password protect the screen saver" to "Enabled".</fixtext>
+      <fix id="F-57631r945422_fix"/>
+      <check system="C-57905r945421_chk">
+        <check-content>Verify the screen saver is configured to require a password.
+
+Run "gpedit.msc" and navigate to User Configuration >> Administrative Templates >> Control Panel >> Personalization.
+
+If the value for "Password protect the screen saver" is not "Enabled", this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <!-- CAT II (medium) - notselected (should map to Not Reviewed) -->
+  <Group id="V-254245">
+    <title>SRG-OS-000480-GPOS-00230</title>
+    <description>Windows Server 2022 time synchronization.</description>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-254245r945426_rule" severity="medium" weight="10.0">
+      <version>WN22-00-000005</version>
+      <title>Windows Server 2022 time synchronization must be enabled.</title>
+      <description>An accurate system clock is critical for audit log timestamps and Kerberos authentication.</description>
+      <fixtext fixref="F-57632r945425_fix">Configure the system to synchronize time with an authoritative time source via Group Policy: Computer Configuration >> Administrative Templates >> System >> Windows Time Service.</fixtext>
+      <fix id="F-57632r945425_fix"/>
+      <check system="C-57906r945424_chk">
+        <check-content>Verify the system is configured to synchronize time.
+
+Run "w32tm /query /status"
+
+If the service is not running or the source is not an authoritative time server, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+</Benchmark>

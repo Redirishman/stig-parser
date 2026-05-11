@@ -1,0 +1,277 @@
+/* STIG Compliance Parser — minimal custom styles, no framework */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --color-bg:        #f5f6fa;
+  --color-surface:   #ffffff;
+  --color-border:    #dde1ea;
+  --color-primary:   #2563eb;
+  --color-primary-h: #1d4ed8;
+  --color-danger:    #dc2626;
+  --color-success:   #16a34a;
+  --color-warning-bg:#fffbeb;
+  --color-warning-br:#fbbf24;
+  --color-text:      #1e293b;
+  --color-muted:     #64748b;
+  --radius:          8px;
+  --shadow:          0 1px 4px rgba(0,0,0,.08);
+}
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.5;
+}
+
+.container {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.subtitle {
+  color: var(--color-muted);
+  margin-top: .4rem;
+}
+
+/* ── Upload grid ─────────────────────────────────────────────────────── */
+
+.upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 580px) {
+  .upload-grid { grid-template-columns: 1fr; }
+}
+
+.upload-zone {
+  background: var(--color-surface);
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius);
+  padding: 2rem 1.25rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.upload-zone:hover,
+.upload-zone.dragover {
+  border-color: var(--color-primary);
+  background: #eff6ff;
+}
+
+.zone-icon {
+  font-size: 2.5rem;
+  margin-bottom: .5rem;
+}
+
+.upload-zone h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: .3rem;
+}
+
+.upload-zone p {
+  color: var(--color-muted);
+  font-size: .82rem;
+  margin-bottom: .9rem;
+}
+
+.file-list {
+  list-style: none;
+  text-align: left;
+  margin-top: .75rem;
+  font-size: .8rem;
+  color: var(--color-muted);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.file-list li::before {
+  content: "✓ ";
+  color: var(--color-success);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  padding: .5rem 1.25rem;
+  border-radius: var(--radius);
+  font-size: .9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  text-decoration: none;
+  transition: background .15s, opacity .15s;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-h);
+}
+
+.btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.btn-secondary:hover {
+  background: var(--color-bg);
+}
+
+.btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.form-actions {
+  text-align: center;
+}
+
+/* ── Progress ────────────────────────────────────────────────────────── */
+
+#progress-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  box-shadow: var(--shadow);
+  margin-top: 1.5rem;
+}
+
+#progress-section h2 {
+  margin-bottom: 1rem;
+}
+
+.progress-bar-wrap {
+  height: 10px;
+  background: var(--color-border);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: .75rem;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--color-primary);
+  border-radius: 99px;
+  transition: width .4s ease;
+}
+
+.progress-text {
+  color: var(--color-muted);
+  font-size: .875rem;
+  min-height: 1.2em;
+}
+
+/* ── Warnings ────────────────────────────────────────────────────────── */
+
+.warnings-box {
+  margin-top: 1.25rem;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-br);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+
+.warnings-box h3 {
+  font-size: .9rem;
+  font-weight: 700;
+  margin-bottom: .5rem;
+  color: #92400e;
+}
+
+.warnings-box ul {
+  list-style: none;
+  font-size: .8rem;
+  color: #78350f;
+}
+
+.warnings-box li + li {
+  margin-top: .25rem;
+}
+
+.warnings-box li::before {
+  content: "⚠ ";
+}
+
+/* ── Result cards ────────────────────────────────────────────────────── */
+
+#result-section {
+  margin-top: 1.5rem;
+}
+
+.result-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 2.5rem;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.result-icon {
+  font-size: 3rem;
+  margin-bottom: .75rem;
+}
+
+.result-card h2 {
+  margin-bottom: 1.25rem;
+}
+
+.result-card.success .result-icon { color: var(--color-success); }
+.result-card.error   .result-icon { color: var(--color-danger); }
+
+.result-card .btn + .btn {
+  margin-left: .75rem;
+}
+
+#result-error p {
+  color: var(--color-danger);
+  margin-bottom: 1.25rem;
+  font-size: .875rem;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+
+footer {
+  margin-top: 3rem;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: .8rem;
+}
+
+footer .small {
+  font-size: .75rem;
+  margin-top: .25rem;
+}

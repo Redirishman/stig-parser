@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated OpenSCAP XCCDF 1.2 results fixture.
+  Represents output from oscap 1.3.x scanning RHEL 9.
+  All hostnames, IPs, and system data are synthetic.
+-->
+<TestResult
+    xmlns="http://checklists.nist.gov/xccdf/1.2"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    id="xccdf_org.open-scap.oscap_testresult_xccdf_mil.disa.stig_benchmark_RHEL_9_STIG"
+    start-time="2024-11-15T09:00:00"
+    end-time="2024-11-15T09:30:00"
+    version="1.2">
+
+  <benchmark href="U_RHEL_9_STIG_V1R1_Manual-xccdf.xml"
+             id="xccdf_mil.disa.stig_benchmark_RHEL_9_STIG"/>
+
+  <title>OpenSCAP Results: Red Hat Enterprise Linux 9 STIG</title>
+
+  <target>rhel9-server-02</target>
+  <target-address>10.0.0.25</target-address>
+  <target-address>fe80::1</target-address>
+
+  <platform idref="cpe:/o:redhat:enterprise_linux:9"/>
+
+  <identity authenticated="1" privileged="1">root</identity>
+
+  <generator>
+    <product xmlns="http://checklists.nist.gov/xccdf/1.2">openscap</product>
+    <version>1.3.8</version>
+    <timestamp>2024-11-15T09:00:00</timestamp>
+  </generator>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-257777r925318_rule" severity="high" time="2024-11-15T09:01:00">
+    <result>fail</result>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+      <check-content-ref href="oval.xml" name="oval:mil.disa.stig.rhel9:def:1"/>
+    </check>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-257778r925321_rule" severity="medium" time="2024-11-15T09:01:30">
+    <result>pass</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-257779r925324_rule" severity="medium" time="2024-11-15T09:02:00">
+    <result>notchecked</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-257780r925327_rule" severity="low" time="2024-11-15T09:02:30">
+    <result>error</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-257781r925330_rule" severity="medium" time="2024-11-15T09:03:00">
+    <result>unknown</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-257782r925333_rule" severity="low" time="2024-11-15T09:03:30">
+    <result>notapplicable</result>
+  </rule-result>
+
+  <score system="urn:xccdf:scoring:default" maximum="100">68.0</score>
+
+</TestResult>

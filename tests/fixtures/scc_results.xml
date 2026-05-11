@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated SCC (SCAP Compliance Checker) XCCDF 1.2 results fixture.
+  Represents output from DISA SCC v5.x scanning Windows Server 2022.
+  All hostnames, IPs, and system data are synthetic.
+-->
+<cdf:TestResult
+    xmlns:cdf="http://checklists.nist.gov/xccdf/1.2"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    id="xccdf_mil.disa.scc_testresult_Windows-Server-2022-STIG"
+    start-time="2024-11-15T08:00:00"
+    end-time="2024-11-15T08:45:00"
+    version="1.0">
+
+  <cdf:benchmark href="U_MS_Windows_Server_2022_STIG_V1R4_Manual-xccdf.xml"
+                 id="xccdf_mil.disa.stig_benchmark_MS_Windows_Server_2022_STIG"/>
+
+  <cdf:title>SCC Results: Windows Server 2022 STIG</cdf:title>
+
+  <!-- SCC generator metadata — present in real SCC output -->
+  <cdf:metadata>
+    <cdf:creator>DISA SCC 5.7.2</cdf:creator>
+  </cdf:metadata>
+
+  <cdf:identity authenticated="1" privileged="1">SYSTEM</cdf:identity>
+
+  <cdf:target>WIN-SERVER-01</cdf:target>
+  <cdf:target-address>192.168.1.10</cdf:target-address>
+
+  <cdf:platform idref="cpe:/o:microsoft:windows_server_2022"/>
+
+  <cdf:set-value idref="xccdf_mil.disa.stig_value_sysctl_net_ipv4_conf_all_accept_source_route_value">0</cdf:set-value>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254239r945408_rule" severity="high" time="2024-11-15T08:05:00">
+    <cdf:result>fail</cdf:result>
+    <cdf:check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+      <cdf:check-content-ref href="U_MS_Windows_Server_2022_STIG_V1R4-xccdf.xml" name="oval:mil.disa.stig.windows_server_2022:def:1"/>
+    </cdf:check>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254240r945411_rule" severity="medium" time="2024-11-15T08:05:30">
+    <cdf:result>pass</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254241r945414_rule" severity="medium" time="2024-11-15T08:06:00">
+    <cdf:result>notchecked</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254242r945417_rule" severity="low" time="2024-11-15T08:06:30">
+    <cdf:result>error</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254243r945420_rule" severity="medium" time="2024-11-15T08:07:00">
+    <cdf:result>unknown</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254244r945423_rule" severity="low" time="2024-11-15T08:07:30">
+    <cdf:result>notapplicable</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254245r945426_rule" severity="medium" time="2024-11-15T08:08:00">
+    <cdf:result>notselected</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:score system="urn:xccdf:scoring:default" maximum="100">72.5</cdf:score>
+
+</cdf:TestResult>

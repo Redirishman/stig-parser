@@ -1,0 +1,5 @@
+# Normalize line endings for cross-platform consistency
+* text=auto
+
+# Fixtures — keep as-is
+tests/fixtures/*.xml text eol=lf

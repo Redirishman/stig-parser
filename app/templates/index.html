@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STIG Compliance Parser</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>STIG Compliance Parser</h1>
+      <p class="subtitle">Upload XCCDF scan results and STIG benchmark files to generate a consolidated findings report.</p>
+    </header>
+
+    <main id="app">
+
+      <!-- Upload form -->
+      <section id="upload-section">
+        <form id="upload-form" enctype="multipart/form-data">
+
+          <div class="upload-grid">
+
+            <!-- Results drop zone -->
+            <div class="upload-zone" id="results-zone">
+              <div class="zone-icon">&#128196;</div>
+              <h2>Scan Results</h2>
+              <p>XCCDF results files from SCC, OpenSCAP, Nessus, or Evaluate-STIG</p>
+              <label class="btn btn-secondary" for="results-input">Choose Files</label>
+              <input type="file" id="results-input" name="results" multiple accept=".xml" hidden>
+              <div class="file-list" id="results-file-list"></div>
+            </div>
+
+            <!-- Benchmark drop zone -->
+            <div class="upload-zone" id="benchmarks-zone">
+              <div class="zone-icon">&#128218;</div>
+              <h2>STIG Benchmarks</h2>
+              <p>STIG benchmark definition XML files from DISA (public.cyber.mil)</p>
+              <label class="btn btn-secondary" for="benchmarks-input">Choose Files</label>
+              <input type="file" id="benchmarks-input" name="benchmarks" multiple accept=".xml" hidden>
+              <div class="file-list" id="benchmarks-file-list"></div>
+            </div>
+
+          </div><!-- /.upload-grid -->
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="process-btn" disabled>
+              Process
+            </button>
+          </div>
+
+        </form>
+      </section><!-- /#upload-section -->
+
+      <!-- Progress / status section (hidden until job starts) -->
+      <section id="progress-section" hidden>
+        <h2>Processing</h2>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p id="progress-text" class="progress-text">Starting&hellip;</p>
+
+        <div id="warnings-box" class="warnings-box" hidden>
+          <h3>Warnings</h3>
+          <ul id="warnings-list"></ul>
+        </div>
+      </section>
+
+      <!-- Result section (hidden until complete) -->
+      <section id="result-section" hidden>
+        <div class="result-card success" id="result-success" hidden>
+          <div class="result-icon">&#10003;</div>
+          <h2>Report Ready</h2>
+          <a id="download-link" href="#" class="btn btn-primary">Download Excel Report</a>
+          <button class="btn btn-secondary" id="reset-btn">Process Another Set</button>
+        </div>
+        <div class="result-card error" id="result-error" hidden>
+          <div class="result-icon">&#10007;</div>
+          <h2>Processing Failed</h2>
+          <p id="error-message"></p>
+          <button class="btn btn-secondary" id="reset-btn-error">Try Again</button>
+        </div>
+      </section>
+
+    </main>
+
+    <footer>
+      <p>Supports SCC &bull; OpenSCAP &bull; Nessus SCAP* &bull; Evaluate-STIG*</p>
+      <p class="small">* Built from documentation &mdash; not yet validated against real output. See README.</p>
+    </footer>
+  </div><!-- /.container -->
+
+  <script>
+  (function () {
+    'use strict';
+
+    const resultsInput    = document.getElementById('results-input');
+    const benchmarksInput = document.getElementById('benchmarks-input');
+    const resultsZone     = document.getElementById('results-zone');
+    const benchmarksZone  = document.getElementById('benchmarks-zone');
+    const resultsFileList    = document.getElementById('results-file-list');
+    const benchmarksFileList = document.getElementById('benchmarks-file-list');
+    const processBtn      = document.getElementById('process-btn');
+    const uploadForm      = document.getElementById('upload-form');
+    const uploadSection   = document.getElementById('upload-section');
+    const progressSection = document.getElementById('progress-section');
+    const progressBar     = document.getElementById('progress-bar');
+    const progressText    = document.getElementById('progress-text');
+    const warningsBox     = document.getElementById('warnings-box');
+    const warningsList    = document.getElementById('warnings-list');
+    const resultSection   = document.getElementById('result-section');
+    const resultSuccess   = document.getElementById('result-success');
+    const resultError     = document.getElementById('result-error');
+    const downloadLink    = document.getElementById('download-link');
+    const errorMessage    = document.getElementById('error-message');
+
+    let pollTimer = null;
+    let currentJobId = '{{ existing_job_id or "" }}';
+
+    // ------------------------------------------------------------------
+    // File input + drag-and-drop
+    // ------------------------------------------------------------------
+
+    function updateFileList(input, listEl) {
+      listEl.innerHTML = '';
+      Array.from(input.files).forEach(function (f) {
+        const li = document.createElement('li');
+        li.textContent = f.name;
+        listEl.appendChild(li);
+      });
+      updateProcessBtn();
+    }
+
+    function setupZone(zone, input, listEl) {
+      zone.addEventListener('click', function (e) {
+        if (e.target === zone || e.target.tagName === 'P' || e.target.tagName === 'H2' || e.target.className === 'zone-icon') {
+          input.click();
+        }
+      });
+
+      input.addEventListener('change', function () {
+        updateFileList(input, listEl);
+      });
+
+      zone.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        zone.classList.add('dragover');
+      });
+
+      zone.addEventListener('dragleave', function () {
+        zone.classList.remove('dragover');
+      });
+
+      zone.addEventListener('drop', function (e) {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+        // Transfer dropped files into the input
+        const dt = new DataTransfer();
+        Array.from(e.dataTransfer.files).filter(function (f) {
+          return f.name.toLowerCase().endsWith('.xml');
+        }).forEach(function (f) { dt.items.add(f); });
+        input.files = dt.files;
+        updateFileList(input, listEl);
+      });
+    }
+
+    setupZone(resultsZone, resultsInput, resultsFileList);
+    setupZone(benchmarksZone, benchmarksInput, benchmarksFileList);
+
+    function updateProcessBtn() {
+      const hasResults    = resultsInput.files && resultsInput.files.length > 0;
+      const hasBenchmarks = benchmarksInput.files && benchmarksInput.files.length > 0;
+      processBtn.disabled = !(hasResults && hasBenchmarks);
+    }
+
+    // ------------------------------------------------------------------
+    // Form submission
+    // ------------------------------------------------------------------
+
+    uploadForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      const fd = new FormData(uploadForm);
+      uploadSection.hidden = true;
+      progressSection.hidden = false;
+      resultSection.hidden = true;
+      resultSuccess.hidden = true;
+      resultError.hidden = true;
+      warningsBox.hidden = true;
+      warningsList.innerHTML = '';
+      setProgress(5, 'Uploading files…');
+
+      fetch('/api/process', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) {
+            showError(data.error);
+            return;
+          }
+          currentJobId = data.job_id;
+          startPolling(currentJobId);
+        })
+        .catch(function (err) {
+          showError('Upload failed: ' + err.message);
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // Polling
+    // ------------------------------------------------------------------
+
+    function startPolling(jobId) {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(function () { poll(jobId); }, 1000);
+    }
+
+    function poll(jobId) {
+      fetch('/api/status/' + jobId)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) { showError(data.error); return; }
+
+          progressText.textContent = data.progress || '';
+          showWarnings(data.warnings || []);
+
+          if (data.status === 'complete') {
+            clearInterval(pollTimer);
+            setProgress(100, data.progress);
+            showSuccess(jobId);
+          } else if (data.status === 'error') {
+            clearInterval(pollTimer);
+            showError(data.error || 'An unknown error occurred.');
+          } else {
+            // Animate progress bar during running state
+            const current = parseInt(progressBar.style.width) || 10;
+            setProgress(Math.min(current + 5, 90), data.progress);
+          }
+        })
+        .catch(function () {
+          // Network hiccup — keep polling
+        });
+    }
+
+    function setProgress(pct, text) {
+      progressBar.style.width = pct + '%';
+      if (text) progressText.textContent = text;
+    }
+
+    function showWarnings(warnings) {
+      if (!warnings || warnings.length === 0) return;
+      warningsList.innerHTML = '';
+      warnings.forEach(function (w) {
+        const li = document.createElement('li');
+        li.textContent = w;
+        warningsList.appendChild(li);
+      });
+      warningsBox.hidden = false;
+    }
+
+    function showSuccess(jobId) {
+      progressSection.hidden = true;
+      resultSection.hidden = false;
+      resultSuccess.hidden = false;
+      downloadLink.href = '/api/download/' + jobId;
+    }
+
+    function showError(msg) {
+      if (pollTimer) clearInterval(pollTimer);
+      progressSection.hidden = true;
+      resultSection.hidden = false;
+      resultError.hidden = false;
+      errorMessage.textContent = msg;
+    }
+
+    // ------------------------------------------------------------------
+    // Reset
+    // ------------------------------------------------------------------
+
+    function resetUI() {
+      currentJobId = '';
+      uploadSection.hidden = false;
+      progressSection.hidden = true;
+      resultSection.hidden = true;
+      resultSuccess.hidden = true;
+      resultError.hidden = true;
+      warningsBox.hidden = true;
+      warningsList.innerHTML = '';
+      resultsFileList.innerHTML = '';
+      benchmarksFileList.innerHTML = '';
+      resultsInput.value = '';
+      benchmarksInput.value = '';
+      processBtn.disabled = true;
+      setProgress(0, '');
+    }
+
+    document.getElementById('reset-btn').addEventListener('click', resetUI);
+    document.getElementById('reset-btn-error').addEventListener('click', resetUI);
+
+    // ------------------------------------------------------------------
+    // Reconnect to an in-progress job from a previous page load
+    // ------------------------------------------------------------------
+
+    if (currentJobId) {
+      fetch('/api/status/' + currentJobId)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.error && (data.status === 'running' || data.status === 'complete')) {
+            uploadSection.hidden = true;
+            progressSection.hidden = false;
+            if (data.status === 'complete') {
+              showSuccess(currentJobId);
+            } else {
+              startPolling(currentJobId);
+            }
+          }
+        })
+        .catch(function () { /* no active job — show upload form */ });
+    }
+
+  })();
+  </script>
+</body>
+</html>

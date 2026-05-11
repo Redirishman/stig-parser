@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated Evaluate-STIG XCCDF results fixture.
+  Represents output from Evaluate-STIG (PowerShell-based scanner).
+  Evaluate-STIG outputs XCCDF-like XML but uses a default namespace (no prefix)
+  and populates the generator element with its own identity string.
+  All hostnames, IPs, and system data are synthetic.
+  NOTE: This parser is built from public documentation. UNTESTED WITH REAL EVALUATE-STIG OUTPUT.
+-->
+<TestResult
+    xmlns="http://checklists.nist.gov/xccdf/1.2"
+    id="xccdf_Evaluate-STIG_testresult_Windows-Server-2022-STIG_20241115"
+    start-time="2024-11-15T11:00:00"
+    end-time="2024-11-15T11:15:00"
+    version="1.0">
+
+  <benchmark href="U_MS_Windows_Server_2022_STIG_V1R4_Manual-xccdf.xml"
+             id="xccdf_mil.disa.stig_benchmark_MS_Windows_Server_2022_STIG"/>
+
+  <title>Evaluate-STIG Results: Windows Server 2022 STIG</title>
+
+  <target>WIN-SERVER-04</target>
+  <target-address>192.168.1.40</target-address>
+
+  <platform idref="cpe:/o:microsoft:windows_server_2022"/>
+
+  <identity authenticated="1" privileged="1">DOMAIN\SvcAccount</identity>
+
+  <generator>
+    <product>Evaluate-STIG</product>
+    <version>1.2306.1</version>
+    <timestamp>2024-11-15T11:00:00</timestamp>
+  </generator>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-254239r945408_rule" severity="high" time="2024-11-15T11:01:00">
+    <result>fail</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-254240r945411_rule" severity="medium" time="2024-11-15T11:01:30">
+    <result>pass</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-254241r945414_rule" severity="medium" time="2024-11-15T11:02:00">
+    <result>notchecked</result>
+  </rule-result>
+
+  <rule-result idref="xccdf_mil.disa.stig_rule_SV-254243r945420_rule" severity="medium" time="2024-11-15T11:02:30">
+    <result>unknown</result>
+  </rule-result>
+
+  <score system="urn:xccdf:scoring:default" maximum="100">60.0</score>
+
+</TestResult>

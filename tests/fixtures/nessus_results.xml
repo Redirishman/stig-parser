@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated Nessus SCAP XCCDF 1.2 results fixture.
+  Represents output from Tenable Nessus Professional with SCAP compliance plugin.
+  Nessus wraps standard XCCDF output with its own generator namespace.
+  All hostnames, IPs, and system data are synthetic.
+  NOTE: This parser is built from public documentation. UNTESTED WITH REAL NESSUS OUTPUT.
+-->
+<cdf:TestResult
+    xmlns:cdf="http://checklists.nist.gov/xccdf/1.2"
+    xmlns:nessus="http://www.nessus.org/cm"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    id="xccdf_com.tenable_testresult_Windows-Server-2022-STIG"
+    start-time="2024-11-15T10:00:00"
+    end-time="2024-11-15T10:20:00"
+    version="1.0">
+
+  <cdf:benchmark href="U_MS_Windows_Server_2022_STIG_V1R4_Manual-xccdf.xml"
+                 id="xccdf_mil.disa.stig_benchmark_MS_Windows_Server_2022_STIG"/>
+
+  <cdf:title>Nessus SCAP Results: Windows Server 2022 STIG</cdf:title>
+
+  <cdf:target>WIN-SERVER-03</cdf:target>
+  <cdf:target-address>192.168.1.30</cdf:target-address>
+
+  <cdf:platform idref="cpe:/o:microsoft:windows_server_2022"/>
+
+  <!-- Nessus-specific generator metadata -->
+  <cdf:metadata>
+    <nessus:plugin id="21156" version="1.12"/>
+    <nessus:scanner-version>10.6.1</nessus:scanner-version>
+  </cdf:metadata>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254239r945408_rule" severity="high" time="2024-11-15T10:01:00">
+    <cdf:result>fail</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254240r945411_rule" severity="medium" time="2024-11-15T10:01:30">
+    <cdf:result>pass</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254241r945414_rule" severity="medium" time="2024-11-15T10:02:00">
+    <cdf:result>notchecked</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-254242r945417_rule" severity="low" time="2024-11-15T10:02:30">
+    <cdf:result>error</cdf:result>
+  </cdf:rule-result>
+
+  <cdf:score system="urn:xccdf:scoring:default" maximum="100">55.0</cdf:score>
+
+</cdf:TestResult>

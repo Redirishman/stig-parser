@@ -1,0 +1,14 @@
+services:
+  stig-parser:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - stig-tmp:/tmp/stig-parser-jobs
+    environment:
+      - FLASK_SECRET_KEY=change-me-in-production
+      - STIG_TEMP_DIR=/tmp/stig-parser-jobs
+    restart: unless-stopped
+
+volumes:
+  stig-tmp:
