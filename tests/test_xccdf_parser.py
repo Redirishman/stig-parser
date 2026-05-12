@@ -142,6 +142,7 @@ class TestEdgeCases:
         assert result is None
 
     def test_missing_target_uses_filename(self, tmp_path):
+        """When no <target>, <target-facts>, or <title> exist, fall back to filename stem."""
         xml = tmp_path / "my-server.xml"
         xml.write_text(
             '<?xml version="1.0"?>'
@@ -155,6 +156,7 @@ class TestEdgeCases:
         assert result.hostname == "my-server"
 
     def test_missing_ip_returns_na(self, tmp_path):
+        """When no <target-address> or <target-facts> IP exists, fall back to 'N/A'."""
         xml = tmp_path / "noip.xml"
         xml.write_text(
             '<?xml version="1.0"?>'
@@ -167,3 +169,130 @@ class TestEdgeCases:
         result = PARSER.parse(xml)
         assert result is not None
         assert result.ip_address == "N/A"
+
+    # ------------------------------------------------------------------
+    # <target-facts> fallbacks
+    # ------------------------------------------------------------------
+
+    def test_target_facts_hostname_host_name_urn(self, tmp_path):
+        """host_name URN in <target-facts> used when <target> is absent."""
+        xml = tmp_path / "facts-host.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '<target-facts>'
+            '<fact name="urn:scap:fact:asset:identifier:host_name">FACTS-HOST-01</fact>'
+            '<fact name="urn:scap:fact:asset:identifier:ipv4">10.1.2.3</fact>'
+            '</target-facts>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "FACTS-HOST-01"
+
+    def test_target_facts_hostname_fqdn_urn(self, tmp_path):
+        """fqdn URN in <target-facts> used when host_name URN is absent."""
+        xml = tmp_path / "facts-fqdn.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '<target-facts>'
+            '<fact name="urn:scap:fact:asset:identifier:fqdn">server.example.com</fact>'
+            '</target-facts>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "server.example.com"
+
+    def test_target_facts_ip_ipv4_urn(self, tmp_path):
+        """ipv4 URN in <target-facts> used when <target-address> is absent."""
+        xml = tmp_path / "facts-ip.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '<target>SOME-HOST</target>'
+            '<target-facts>'
+            '<fact name="urn:scap:fact:asset:identifier:ipv4">172.16.0.50</fact>'
+            '</target-facts>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.ip_address == "172.16.0.50"
+
+    def test_target_facts_prefers_ipv4_over_ipv6(self, tmp_path):
+        """IPv4 URN is preferred over IPv6 when both are present in <target-facts>."""
+        xml = tmp_path / "facts-dual-ip.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '<target>SOME-HOST</target>'
+            '<target-facts>'
+            '<fact name="urn:scap:fact:asset:identifier:ipv6">fe80::1</fact>'
+            '<fact name="urn:scap:fact:asset:identifier:ipv4">192.168.10.5</fact>'
+            '</target-facts>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.ip_address == "192.168.10.5"
+
+    def test_target_takes_precedence_over_target_facts(self, tmp_path):
+        """<target> beats <target-facts> when both are present."""
+        xml = tmp_path / "both.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '<target>EXPLICIT-HOST</target>'
+            '<target-facts>'
+            '<fact name="urn:scap:fact:asset:identifier:host_name">FACTS-HOST</fact>'
+            '</target-facts>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "EXPLICIT-HOST"
+
+    # ------------------------------------------------------------------
+    # <title> fallback
+    # ------------------------------------------------------------------
+
+    def test_title_used_when_target_and_facts_absent(self, tmp_path):
+        """<title> element used as hostname when <target> and <target-facts> are absent."""
+        xml = tmp_path / "notarget.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '<title>SCC Results: WIN-TITLE-HOST</title>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "SCC Results: WIN-TITLE-HOST"
+
+    def test_filename_stem_is_last_resort(self, tmp_path):
+        """Filename stem used only when <target>, <target-facts>, and <title> all absent."""
+        xml = tmp_path / "last-resort.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<TestResult xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<benchmark href="test.xml" id="test_benchmark"/>'
+            '</TestResult>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "last-resort"

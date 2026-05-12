@@ -17,6 +17,38 @@ _NS_XCCDF_12 = "http://checklists.nist.gov/xccdf/1.2"
 # XPath helper: try both namespaced and un-namespaced forms
 _XCCDF_NS = {"cdf": _NS_XCCDF_12}
 
+# SCAP fact URNs for hostname and IP, searched in preference order
+_FACT_HOSTNAME_URNS: list[str] = [
+    "urn:scap:fact:asset:identifier:host_name",
+    "urn:scap:fact:asset:identifier:fqdn",
+]
+_FACT_IP_URNS: list[str] = [
+    "urn:scap:fact:asset:identifier:ipv4",
+    "urn:scap:fact:asset:identifier:ipv6",
+]
+
+
+def _find_fact(root: etree._Element, urns: list[str]) -> str:
+    """Search a <target-facts> child for the first matching URN, in preference order.
+
+    Handles any namespace prefix on both <target-facts> and <fact> elements.
+    """
+    found: dict[str, str] = {}
+    for el in root:
+        if callable(el.tag):
+            continue
+        if etree.QName(el.tag).localname == "target-facts":
+            for fact in el:
+                if callable(fact.tag):
+                    continue
+                name_attr = fact.get("name", "")
+                if name_attr in urns and fact.text and name_attr not in found:
+                    found[name_attr] = fact.text.strip()
+    for urn in urns:
+        if urn in found:
+            return found[urn]
+    return ""
+
 
 def _find_text(root: etree._Element, *local_names: str) -> str:
     """Return the text of the first matching element by local name, stripped.
@@ -98,19 +130,33 @@ class XCCDFResultsParser(BaseParser):
         root = tree.getroot()
         scanner = detect_scanner(path)
 
-        hostname = _find_text(root, "target")
+        # Hostname: <target> → <target-facts> host_name/fqdn → <title> → filename stem
+        hostname = (
+            _find_text(root, "target")
+            or _find_fact(root, _FACT_HOSTNAME_URNS)
+            or _find_text(root, "title")
+        )
         if not hostname:
             hostname = path.stem
             log.warning(
-                "%s: No <target> element found — using filename '%s' as hostname",
+                "%s: No hostname found in <target>, <target-facts>, or <title>"
+                " — using filename '%s'",
                 path.name,
                 hostname,
             )
 
-        ip_address = _find_text(root, "target-address")
+        # IP address: <target-address> → <target-facts> ipv4/ipv6 → "N/A"
+        ip_address = (
+            _find_text(root, "target-address")
+            or _find_fact(root, _FACT_IP_URNS)
+        )
         if not ip_address:
             ip_address = "N/A"
-            log.warning("%s: No <target-address> element found — using 'N/A'", path.name)
+            log.warning(
+                "%s: No IP address found in <target-address> or <target-facts>"
+                " — using 'N/A'",
+                path.name,
+            )
 
         benchmark_href, benchmark_id = _get_benchmark_attrs(root)
 
