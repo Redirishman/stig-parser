@@ -26,6 +26,7 @@ from app.parsers.benchmark_parser import BenchmarkParser
 from app.parsers.xccdf_parser import XCCDFResultsParser
 from app.processors.filter import filter_findings
 from app.processors.matcher import match_results_to_benchmarks
+from app.utils.zip_extract import expand_benchmark_paths
 
 log = logging.getLogger(__name__)
 
@@ -176,8 +177,14 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
     logging.getLogger("app").addHandler(log_handler)
 
     try:
+        # Expand any uploaded .zip benchmarks (DISA STIG distribution format)
+        _set_job(job_id, progress="Extracting benchmark archives…")
+        extract_dir = _job_dir(job_id) / "benchmarks_extracted"
+        benchmark_paths, zip_warnings = expand_benchmark_paths(benchmark_paths, extract_dir)
+        warnings.extend(zip_warnings)
+
         # Parse benchmarks
-        _set_job(job_id, progress="Parsing benchmark files…")
+        _set_job(job_id, progress="Parsing benchmark files…", warnings=list(warnings))
         benchmark_parser = BenchmarkParser()
         benchmarks = []
         for path in benchmark_paths:

@@ -35,9 +35,9 @@
             <div class="upload-zone" id="benchmarks-zone">
               <div class="zone-icon">&#128218;</div>
               <h2>STIG Benchmarks</h2>
-              <p>STIG benchmark definition XML files from DISA (public.cyber.mil)</p>
+              <p>STIG benchmark XML or ZIP files from DISA (public.cyber.mil)</p>
               <label class="btn btn-secondary" for="benchmarks-input">Choose Files</label>
-              <input type="file" id="benchmarks-input" name="benchmarks" multiple accept=".xml" hidden>
+              <input type="file" id="benchmarks-input" name="benchmarks" multiple accept=".xml,.zip" hidden>
               <div class="file-list" id="benchmarks-file-list"></div>
             </div>
 
@@ -131,7 +131,7 @@
       updateProcessBtn();
     }
 
-    function setupZone(zone, input, listEl) {
+    function setupZone(zone, input, listEl, allowedExts) {
       zone.addEventListener('click', function (e) {
         if (e.target === zone || e.target.tagName === 'P' || e.target.tagName === 'H2' || e.target.className === 'zone-icon') {
           input.click();
@@ -154,18 +154,19 @@
       zone.addEventListener('drop', function (e) {
         e.preventDefault();
         zone.classList.remove('dragover');
-        // Transfer dropped files into the input
+        // Transfer dropped files into the input, filtering by allowed extensions
         const dt = new DataTransfer();
         Array.from(e.dataTransfer.files).filter(function (f) {
-          return f.name.toLowerCase().endsWith('.xml');
+          const lower = f.name.toLowerCase();
+          return allowedExts.some(function (ext) { return lower.endsWith(ext); });
         }).forEach(function (f) { dt.items.add(f); });
         input.files = dt.files;
         updateFileList(input, listEl);
       });
     }
 
-    setupZone(resultsZone, resultsInput, resultsFileList);
-    setupZone(benchmarksZone, benchmarksInput, benchmarksFileList);
+    setupZone(resultsZone, resultsInput, resultsFileList, ['.xml']);
+    setupZone(benchmarksZone, benchmarksInput, benchmarksFileList, ['.xml', '.zip']);
 
     function updateProcessBtn() {
       const hasResults    = resultsInput.files && resultsInput.files.length > 0;

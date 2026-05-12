@@ -5,6 +5,7 @@ import argparse
 import glob as glob_module
 import logging
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,15 +14,21 @@ from app.parsers.benchmark_parser import BenchmarkParser
 from app.parsers.xccdf_parser import XCCDFResultsParser
 from app.processors.filter import filter_findings
 from app.processors.matcher import match_results_to_benchmarks
+from app.utils.zip_extract import expand_benchmark_paths
 
 
-def _resolve_paths(args: list[str]) -> list[Path]:
-    """Expand directories and glob patterns into a flat list of .xml Paths."""
+def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> list[Path]:
+    """Expand directories and glob patterns into a flat list of Paths.
+
+    Directories are scanned for files matching *extensions* (case-insensitive).
+    Globs and explicit file paths pass through unchanged.
+    """
     paths: list[Path] = []
     for arg in args:
         p = Path(arg)
         if p.is_dir():
-            paths.extend(sorted(p.glob("*.xml")))
+            for ext in extensions:
+                paths.extend(sorted(p.glob(f"*{ext}")))
         elif "*" in arg or "?" in arg or "[" in arg:
             matched = [Path(m) for m in glob_module.glob(arg, recursive=True)]
             paths.extend(sorted(matched))
@@ -78,9 +85,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("app.cli")
 
-    # Resolve file paths
+    # Resolve file paths (results: .xml only, benchmarks: .xml or .zip)
     results_paths = _resolve_paths(args.results)
-    benchmark_paths = _resolve_paths(args.benchmarks)
+    benchmark_paths = _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
 
     if not results_paths:
         log.error("No results files found for: %s", args.results)
@@ -91,6 +98,15 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info("Results files:   %d", len(results_paths))
     log.info("Benchmark files: %d", len(benchmark_paths))
+
+    # Expand any DISA STIG zip benchmarks into a managed temp dir
+    extract_dir = Path(tempfile.mkdtemp(prefix="stig_zip_"))
+    benchmark_paths, zip_warnings = expand_benchmark_paths(benchmark_paths, extract_dir)
+    for w in zip_warnings:
+        log.warning(w)
+    if not benchmark_paths:
+        log.error("No benchmark XCCDF files available after zip expansion. Aborting.")
+        return 1
 
     # Parse benchmarks
     benchmark_parser = BenchmarkParser()
