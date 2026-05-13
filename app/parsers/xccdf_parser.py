@@ -28,6 +28,35 @@ _FACT_IP_URNS: list[str] = [
 ]
 
 
+def _find_test_result(root: etree._Element) -> etree._Element:
+    """Return the <TestResult> element to operate on.
+
+    XCCDF results files come in two shapes in the wild:
+      1. <TestResult> is the document root (most SCC, OpenSCAP output)
+      2. <Benchmark> is the root with <TestResult> nested inside (some
+         scanners, including certain SCC Windows 11 outputs)
+
+    Returns the <TestResult> if found anywhere in the tree, otherwise the
+    original root (callers will then find no rule-results and surface a
+    clear warning).
+    """
+    if etree.QName(root.tag).localname == "TestResult":
+        return root
+    # Direct child first (cheap, common case)
+    for el in root:
+        if callable(el.tag):
+            continue
+        if etree.QName(el.tag).localname == "TestResult":
+            return el
+    # Fall back to a deeper search
+    for el in root.iter():
+        if callable(el.tag):
+            continue
+        if etree.QName(el.tag).localname == "TestResult":
+            return el
+    return root
+
+
 def _find_fact(root: etree._Element, urns: list[str]) -> str:
     """Search a <target-facts> child for the first matching URN, in preference order.
 
@@ -127,8 +156,11 @@ class XCCDFResultsParser(BaseParser):
             log.warning("Skipping %s — invalid XML: %s", path.name, exc)
             return None
 
-        root = tree.getroot()
+        document_root = tree.getroot()
         scanner = detect_scanner(path)
+        # XCCDF target/result data lives inside <TestResult> — locate it whether
+        # it is the root element or nested inside a <Benchmark>
+        root = _find_test_result(document_root)
 
         # Hostname: <target> → <target-facts> host_name/fqdn → <title> → filename stem
         hostname = (
@@ -174,6 +206,13 @@ class XCCDFResultsParser(BaseParser):
                 )
                 continue
             rule_results.append(RuleResult(rule_id=rule_id, status=status))
+
+        if not rule_results:
+            log.warning(
+                "%s: 0 <rule-result> elements found — file may not be an XCCDF "
+                "results file, or may use an unrecognised structure",
+                path.name,
+            )
 
         return ScanResult(
             source_file=path.name,

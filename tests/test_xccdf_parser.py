@@ -296,3 +296,75 @@ class TestEdgeCases:
         result = PARSER.parse(xml)
         assert result is not None
         assert result.hostname == "last-resort"
+
+    # ------------------------------------------------------------------
+    # <TestResult> nested inside <Benchmark> (some SCC outputs)
+    # ------------------------------------------------------------------
+
+    def test_nested_test_result_extracts_hostname_ip_and_rules(self, tmp_path):
+        """When <TestResult> is nested inside <Benchmark>, parser still finds host/IP/rules."""
+        xml = tmp_path / "nested.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="bench_id">'
+            '<TestResult id="result1">'
+            '<benchmark href="benchmark.xml" id="benchmark_id"/>'
+            '<target>NESTED-HOST</target>'
+            '<target-address>10.20.30.40</target-address>'
+            '<rule-result idref="SV-1_rule">'
+            '<result>fail</result>'
+            '</rule-result>'
+            '<rule-result idref="SV-2_rule">'
+            '<result>pass</result>'
+            '</rule-result>'
+            '<rule-result idref="SV-3_rule">'
+            '<result>notchecked</result>'
+            '</rule-result>'
+            '</TestResult>'
+            '</Benchmark>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "NESTED-HOST"
+        assert result.ip_address == "10.20.30.40"
+        assert result.benchmark_id == "benchmark_id"
+        assert len(result.rule_results) == 3
+        statuses = {rr.rule_id: rr.status for rr in result.rule_results}
+        assert statuses["SV-1_rule"] == "fail"
+        assert statuses["SV-2_rule"] == "pass"
+        assert statuses["SV-3_rule"] == "notchecked"
+
+    def test_deeply_nested_test_result(self, tmp_path):
+        """TestResult buried under multiple wrapper elements is still found."""
+        xml = tmp_path / "deep.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2">'
+            '<Group id="wrapper">'
+            '<TestResult id="result1">'
+            '<target>DEEP-HOST</target>'
+            '<rule-result idref="SV-X_rule">'
+            '<result>fail</result>'
+            '</rule-result>'
+            '</TestResult>'
+            '</Group>'
+            '</Benchmark>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.hostname == "DEEP-HOST"
+        assert len(result.rule_results) == 1
+
+    def test_no_test_result_falls_back_safely(self, tmp_path):
+        """File with no <TestResult> anywhere yields a parseable but empty ScanResult."""
+        xml = tmp_path / "no-results.xml"
+        xml.write_text(
+            '<?xml version="1.0"?>'
+            '<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="b"/>',
+            encoding="utf-8",
+        )
+        result = PARSER.parse(xml)
+        assert result is not None
+        assert result.rule_results == []

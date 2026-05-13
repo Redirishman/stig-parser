@@ -218,7 +218,23 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
         findings = filter_findings(findings)
 
         if not findings:
-            _set_job(job_id, status="error", error="No actionable findings after filtering.", warnings=list(warnings))
+            total_rules = sum(len(s.rule_results) for s in scan_results)
+            if total_rules == 0:
+                msg = (
+                    f"No <rule-result> elements were found in any of the "
+                    f"{len(scan_results)} results file(s). The files may not be "
+                    f"XCCDF scan results, or may use an unrecognised structure. "
+                    f"Check the warnings below for details."
+                )
+            else:
+                msg = (
+                    f"Parsed {total_rules} rule-result(s) across "
+                    f"{len(scan_results)} file(s), but none had an actionable "
+                    f"status (Open / Not Reviewed / Error / Unknown). Either "
+                    f"every rule passed, or the results were not matched to "
+                    f"the supplied STIG benchmarks. Check the warnings below."
+                )
+            _set_job(job_id, status="error", error=msg, warnings=list(warnings))
             return
 
         # Export

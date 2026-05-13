@@ -78,6 +78,10 @@
           <div class="result-icon">&#10007;</div>
           <h2>Processing Failed</h2>
           <p id="error-message"></p>
+          <div id="error-warnings-box" class="warnings-box" hidden>
+            <h3>Warnings</h3>
+            <ul id="error-warnings-list"></ul>
+          </div>
           <button class="btn btn-secondary" id="reset-btn-error">Try Again</button>
         </div>
       </section>
@@ -106,8 +110,10 @@
     const progressSection = document.getElementById('progress-section');
     const progressBar     = document.getElementById('progress-bar');
     const progressText    = document.getElementById('progress-text');
-    const warningsBox     = document.getElementById('warnings-box');
-    const warningsList    = document.getElementById('warnings-list');
+    const warningsBox          = document.getElementById('warnings-box');
+    const warningsList         = document.getElementById('warnings-list');
+    const errorWarningsBox     = document.getElementById('error-warnings-box');
+    const errorWarningsList    = document.getElementById('error-warnings-list');
     const resultSection   = document.getElementById('result-section');
     const resultSuccess   = document.getElementById('result-success');
     const resultError     = document.getElementById('result-error');
@@ -116,16 +122,44 @@
 
     let pollTimer = null;
     let currentJobId = '{{ existing_job_id or "" }}';
+    let lastWarnings = [];  // most recent warnings list, for showing on error
 
     // ------------------------------------------------------------------
     // File input + drag-and-drop
     // ------------------------------------------------------------------
 
+    function removeFileAt(input, listEl, index) {
+      // FileList is read-only; rebuild it via DataTransfer minus the chosen entry
+      const dt = new DataTransfer();
+      Array.from(input.files).forEach(function (f, i) {
+        if (i !== index) dt.items.add(f);
+      });
+      input.files = dt.files;
+      updateFileList(input, listEl);
+    }
+
     function updateFileList(input, listEl) {
       listEl.innerHTML = '';
-      Array.from(input.files).forEach(function (f) {
+      Array.from(input.files).forEach(function (f, i) {
         const li = document.createElement('li');
-        li.textContent = f.name;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'file-name';
+        nameSpan.textContent = f.name;
+        li.appendChild(nameSpan);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'file-remove';
+        removeBtn.setAttribute('aria-label', 'Remove ' + f.name);
+        removeBtn.title = 'Remove';
+        removeBtn.textContent = '✕';  // ✕
+        removeBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          removeFileAt(input, listEl, i);
+        });
+        li.appendChild(removeBtn);
+
         listEl.appendChild(li);
       });
       updateProcessBtn();
@@ -218,8 +252,7 @@
       fetch('/api/status/' + jobId)
         .then(function (r) { return r.json(); })
         .then(function (data) {
-          if (data.error) { showError(data.error); return; }
-
+          // Capture warnings first so they're available to showError below
           progressText.textContent = data.progress || '';
           showWarnings(data.warnings || []);
 
@@ -230,6 +263,9 @@
           } else if (data.status === 'error') {
             clearInterval(pollTimer);
             showError(data.error || 'An unknown error occurred.');
+          } else if (data.error) {
+            // 404 or other transport-level error from the status endpoint
+            showError(data.error);
           } else {
             // Animate progress bar during running state
             const current = parseInt(progressBar.style.width) || 10;
@@ -247,6 +283,7 @@
     }
 
     function showWarnings(warnings) {
+      lastWarnings = warnings || [];
       if (!warnings || warnings.length === 0) return;
       warningsList.innerHTML = '';
       warnings.forEach(function (w) {
@@ -270,6 +307,18 @@
       resultSection.hidden = false;
       resultError.hidden = false;
       errorMessage.textContent = msg;
+      // Re-render warnings inside the error card so the user can see why
+      errorWarningsList.innerHTML = '';
+      if (lastWarnings && lastWarnings.length > 0) {
+        lastWarnings.forEach(function (w) {
+          const li = document.createElement('li');
+          li.textContent = w;
+          errorWarningsList.appendChild(li);
+        });
+        errorWarningsBox.hidden = false;
+      } else {
+        errorWarningsBox.hidden = true;
+      }
     }
 
     // ------------------------------------------------------------------
@@ -278,6 +327,7 @@
 
     function resetUI() {
       currentJobId = '';
+      lastWarnings = [];
       uploadSection.hidden = false;
       progressSection.hidden = true;
       resultSection.hidden = true;
@@ -285,6 +335,8 @@
       resultError.hidden = true;
       warningsBox.hidden = true;
       warningsList.innerHTML = '';
+      errorWarningsBox.hidden = true;
+      errorWarningsList.innerHTML = '';
       resultsFileList.innerHTML = '';
       benchmarksFileList.innerHTML = '';
       resultsInput.value = '';
