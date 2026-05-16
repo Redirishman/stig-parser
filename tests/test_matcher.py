@@ -167,6 +167,39 @@ class TestBenchmarkMatchFallback:
         assert findings[0].check_text == "Check text."
 
 
+class TestFullyQualifiedBenchmarkIds:
+    """Regression: XCCDF ids like xccdf_mil.disa.stig_benchmark_X must not all
+    normalise to 'xccdf_mil.disa' via Path.stem."""
+
+    def test_each_scan_matches_its_own_benchmark(self):
+        rule_av = _make_rule("xccdf_mil.disa.stig_rule_SV-213426r961197_rule", "V-213426", "CAT I")
+        rule_win = _make_rule("xccdf_mil.disa.stig_rule_SV-254239r945408_rule", "V-254239", "CAT II")
+
+        bm_av = _make_benchmark("xccdf_mil.disa.stig_benchmark_MS_Defender_Antivirus", [rule_av])
+        bm_win = _make_benchmark("xccdf_mil.disa.stig_benchmark_Microsoft_Windows_11_STIG", [rule_win])
+
+        scan_av = _make_scan(
+            benchmark_id="xccdf_mil.disa.stig_benchmark_MS_Defender_Antivirus",
+            rule_results=[RuleResult(rule_av.rule_id, "fail")],
+        )
+        scan_win = _make_scan(
+            benchmark_id="xccdf_mil.disa.stig_benchmark_Microsoft_Windows_11_STIG",
+            rule_results=[RuleResult(rule_win.rule_id, "fail")],
+        )
+
+        findings = match_results_to_benchmarks([scan_av, scan_win], [bm_av, bm_win])
+        assert len(findings) == 2
+        by_rule = {f.rule_id: f for f in findings}
+
+        av_finding = by_rule[rule_av.rule_id]
+        assert av_finding.vuln_id == "V-213426"
+        assert av_finding.severity == "CAT I"
+
+        win_finding = by_rule[rule_win.rule_id]
+        assert win_finding.vuln_id == "V-254239"
+        assert win_finding.severity == "CAT II"
+
+
 class TestDuplicateTargets:
     def test_both_rows_kept(self):
         rule = _make_rule(RULE_ID)

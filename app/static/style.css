@@ -94,6 +94,21 @@ header h1 {
   margin-bottom: .3rem;
 }
 
+.badge-optional {
+  display: inline-block;
+  font-size: .65rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  background: #eff6ff;
+  color: var(--color-primary);
+  border: 1px solid #bfdbfe;
+  border-radius: 99px;
+  padding: .1rem .45rem;
+  vertical-align: middle;
+  margin-left: .35rem;
+  white-space: nowrap;
+}
+
 .upload-zone p {
   color: var(--color-muted);
   font-size: .82rem;

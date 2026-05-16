@@ -50,6 +50,16 @@ def detect_scanner(path: Path) -> str:
     if _SCC_NAMESPACE in ns_map:
         return "SCC"
 
+    # Check test-system attribute on <TestResult> — SCC uses cpe:/a:niwc:scc:X.Y.Z
+    for el in root.iter():
+        if callable(el.tag):
+            continue
+        if etree.QName(el.tag).localname == "TestResult":
+            test_system = el.get("test-system", "").lower()
+            if "scc" in test_system:
+                return "SCC"
+            break
+
     # Check generator/product elements in any namespace
     generator_text = _extract_generator_text(root)
     if generator_text:

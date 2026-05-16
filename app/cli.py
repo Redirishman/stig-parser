@@ -54,10 +54,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--benchmarks",
-        nargs="+",
-        required=True,
+        nargs="*",
+        required=False,
+        default=None,
         metavar="PATH",
-        help="STIG benchmark XML files or directory (supports globs).",
+        help=(
+            "STIG benchmark XML/ZIP files or directory (supports globs). "
+            "Optional for SCC — result files already embed benchmark definitions."
+        ),
     )
     p.add_argument(
         "--output",
@@ -87,14 +91,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolve file paths (results: .xml only, benchmarks: .xml or .zip)
     results_paths = _resolve_paths(args.results)
-    benchmark_paths = _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
+    benchmark_paths = (
+        _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
+        if args.benchmarks
+        else []
+    )
 
     if not results_paths:
         log.error("No results files found for: %s", args.results)
         return 1
+
+    # When no benchmark files are supplied, SCC result files embed the full
+    # benchmark definitions — use the results files for both sides.
     if not benchmark_paths:
-        log.error("No benchmark files found for: %s", args.benchmarks)
-        return 1
+        log.info(
+            "No --benchmarks supplied — using results files as benchmarks "
+            "(SCC self-contained format)."
+        )
+        benchmark_paths = list(results_paths)
 
     log.info("Results files:   %d", len(results_paths))
     log.info("Benchmark files: %d", len(benchmark_paths))

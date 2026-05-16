@@ -81,8 +81,6 @@ def create_app(secret_key: str | None = None) -> Flask:
 
         if not results_files or all(f.filename == "" for f in results_files):
             return jsonify({"error": "No results files uploaded."}), 400
-        if not benchmark_files or all(f.filename == "" for f in benchmark_files):
-            return jsonify({"error": "No benchmark files uploaded."}), 400
 
         job_id = str(uuid.uuid4())
         job_dir = _job_dir(job_id)
@@ -177,6 +175,11 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
     logging.getLogger("app").addHandler(log_handler)
 
     try:
+        # When no benchmark files were uploaded, SCC result files embed the full
+        # benchmark definitions — use the results files for both sides.
+        if not benchmark_paths:
+            benchmark_paths = list(results_paths)
+
         # Expand any uploaded .zip benchmarks (DISA STIG distribution format)
         _set_job(job_id, progress="Extracting benchmark archives…")
         extract_dir = _job_dir(job_id) / "benchmarks_extracted"

@@ -177,10 +177,12 @@ class XCCDFResultsParser(BaseParser):
                 hostname,
             )
 
-        # IP address: <target-address> → <target-facts> ipv4/ipv6 → "N/A"
+        # IP address: <target-facts> ipv4/ipv6 → <target-address> → "N/A"
+        # Prefer target-facts because scanners like SCC emit one canonical IP there;
+        # <target-address> may list every network adapter (including virtual ones).
         ip_address = (
-            _find_text(root, "target-address")
-            or _find_fact(root, _FACT_IP_URNS)
+            _find_fact(root, _FACT_IP_URNS)
+            or _find_text(root, "target-address")
         )
         if not ip_address:
             ip_address = "N/A"

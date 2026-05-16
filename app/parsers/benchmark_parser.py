@@ -1,4 +1,4 @@
-"""STIG Benchmark (XCCDF 1.1) definition file parser."""
+"""STIG Benchmark definition file parser — supports XCCDF 1.1 and 1.2."""
 from __future__ import annotations
 
 import logging
@@ -10,8 +10,8 @@ from app.parsers.base import BaseParser, Benchmark, BenchmarkRule
 
 log = logging.getLogger(__name__)
 
-# DISA STIG benchmarks use XCCDF 1.1
 _NS_XCCDF_11 = "http://checklists.nist.gov/xccdf/1.1"
+_NS_XCCDF_12 = "http://checklists.nist.gov/xccdf/1.2"
 _NS = {"xccdf": _NS_XCCDF_11}
 
 _SEVERITY_MAP = {
@@ -21,17 +21,31 @@ _SEVERITY_MAP = {
 }
 
 
-def _ns(local: str) -> str:
-    return f"{{{_NS_XCCDF_11}}}{local}"
+def _findall_local(el: etree._Element, local_name: str) -> list[etree._Element]:
+    """Return direct children matching local_name, regardless of namespace prefix."""
+    return [
+        child for child in el
+        if not callable(child.tag) and etree.QName(child.tag).localname == local_name
+    ]
+
+
+def _extract_vuln_id(raw_id: str) -> str:
+    """Return the V-XXXXXX portion of a group id.
+
+    XCCDF 1.1 benchmark files use short ids (e.g. 'V-254239'); XCCDF 1.2
+    SCC result files use fully-qualified ids (e.g.
+    'xccdf_mil.disa.stig_group_V-213426').
+    """
+    if "_group_" in raw_id:
+        return raw_id.split("_group_")[-1]
+    return raw_id
 
 
 def _find_text_ns(el: etree._Element, local_name: str) -> str:
     """Find a direct child by local name (namespace-agnostic) and return its text."""
-    target = f"xccdf:{local_name}"
-    found = el.find(target, _NS)
+    found = el.find(f"xccdf:{local_name}", _NS)
     if found is not None and found.text:
         return found.text.strip()
-    # Fallback: match by local name only
     for child in el:
         tag = child.tag
         if not callable(tag) and etree.QName(tag).localname == local_name:
@@ -46,7 +60,6 @@ def _get_check_text(rule_el: etree._Element) -> str:
         cc = check.find("xccdf:check-content", _NS)
         if cc is not None and cc.text:
             return cc.text.strip()
-    # Fallback: any-namespace traversal
     for el in rule_el.iter():
         if not callable(el.tag) and etree.QName(el.tag).localname == "check-content":
             if el.text:
@@ -59,7 +72,6 @@ def _get_fix_text(rule_el: etree._Element) -> str:
     ft = rule_el.find("xccdf:fixtext", _NS)
     if ft is not None and ft.text:
         return ft.text.strip()
-    # Fallback
     for el in rule_el.iter():
         if not callable(el.tag) and etree.QName(el.tag).localname == "fixtext":
             if el.text:
@@ -68,11 +80,13 @@ def _get_fix_text(rule_el: etree._Element) -> str:
 
 
 class BenchmarkParser(BaseParser):
-    """Parse DISA STIG benchmark (XCCDF 1.1) definition files."""
+    """Parse DISA STIG benchmark definition files (XCCDF 1.1 or 1.2)."""
 
     def parse(self, path: Path) -> Benchmark | None:
         """Parse a benchmark file and return a Benchmark object.
 
+        Accepts both standalone XCCDF 1.1 benchmark files and XCCDF 1.2
+        SCC result files that embed benchmark definitions inline.
         Returns None on XML parse error; logs a warning.
         """
         try:
@@ -88,10 +102,12 @@ class BenchmarkParser(BaseParser):
 
         rules: dict[str, BenchmarkRule] = {}
 
-        for group_el in root.findall("xccdf:Group", _NS):
-            vuln_id = group_el.get("id", "")
+        groups = root.findall("xccdf:Group", _NS) or _findall_local(root, "Group")
+        for group_el in groups:
+            vuln_id = _extract_vuln_id(group_el.get("id", ""))
 
-            for rule_el in group_el.findall("xccdf:Rule", _NS):
+            rule_els = group_el.findall("xccdf:Rule", _NS) or _findall_local(group_el, "Rule")
+            for rule_el in rule_els:
                 rule_id = rule_el.get("id", "")
                 if not rule_id:
                     continue

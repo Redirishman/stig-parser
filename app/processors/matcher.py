@@ -32,28 +32,40 @@ def _find_benchmark(
     """Find the best-matching benchmark for a results file.
 
     Strategy:
-    1. Match by benchmark_id attribute (exact, case-insensitive).
-    2. Match by href stem against benchmark_id (handles path-style hrefs).
-    3. Substring match — benchmark_id contains or is contained in the href stem.
+    1. Exact match on benchmark_id (case-insensitive direct compare).
+    2. Match href stem against benchmark_id — handles path-style hrefs like
+       ``./path/xccdf_mil.disa.stig_benchmark_X.xml``.
+    3. Substring fallback — benchmark_id contains or is contained in the
+       scan's benchmark_id (handles short IDs like ``MS_Windows_Server_2022_STIG``
+       vs fully-qualified ``xccdf_mil.disa.stig_benchmark_MS_Windows_Server_2022_STIG``).
+
+    Note: _normalize_id (Path.stem) is applied only to the href because XCCDF
+    benchmark ids contain dots that Path.stem misinterprets as file extensions.
     """
     if not benchmarks:
         return None
 
-    # Build a normalised id from results
-    candidates = [benchmark_href, benchmark_id]
-    ref_stems = {_normalize_id(c) for c in candidates if c}
+    href_stem = _normalize_id(benchmark_href) if benchmark_href else ""
+    bid_lower = benchmark_id.strip().lower() if benchmark_id else ""
 
-    # Exact match on benchmark id
-    for bm in benchmarks:
-        bm_id_lower = bm.benchmark_id.lower()
-        if bm_id_lower in ref_stems or any(s == bm_id_lower for s in ref_stems):
-            return bm
+    # 1. Exact match on benchmark_id
+    if bid_lower:
+        for bm in benchmarks:
+            if bm.benchmark_id.lower() == bid_lower:
+                return bm
 
-    # Substring match
-    for bm in benchmarks:
-        bm_id_lower = bm.benchmark_id.lower()
-        for ref in ref_stems:
-            if bm_id_lower in ref or ref in bm_id_lower:
+    # 2. Href stem vs benchmark_id
+    if href_stem:
+        for bm in benchmarks:
+            bm_id_lower = bm.benchmark_id.lower()
+            if bm_id_lower == href_stem or bm_id_lower in href_stem or href_stem in bm_id_lower:
+                return bm
+
+    # 3. Substring fallback on benchmark_id
+    if bid_lower:
+        for bm in benchmarks:
+            bm_id_lower = bm.benchmark_id.lower()
+            if bm_id_lower in bid_lower or bid_lower in bm_id_lower:
                 return bm
 
     return None

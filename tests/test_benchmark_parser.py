@@ -61,6 +61,71 @@ class TestSampleBenchmark:
         assert "multifactor" in rule.fix_text.lower() or "Configure" in rule.fix_text
 
 
+class TestXCCDF12Benchmark:
+    """BenchmarkParser must handle XCCDF 1.2 files (SCC result files with inline defs)."""
+
+    def setup_method(self):
+        xml = Path(__file__).parent / "_tmp_xccdf12_bench.xml"
+        xml.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<cdf:Benchmark xmlns:cdf="http://checklists.nist.gov/xccdf/1.2"'
+            '  id="xccdf_mil.disa.stig_benchmark_MS_Defender_Antivirus">'
+            '<cdf:title>Microsoft Defender Antivirus STIG SCAP Benchmark</cdf:title>'
+            '<cdf:Group id="xccdf_mil.disa.stig_group_V-213426">'
+            '  <cdf:title>SRG-APP-000279</cdf:title>'
+            '  <cdf:Rule id="xccdf_mil.disa.stig_rule_SV-213426r961197_rule"'
+            '    weight="10.0" severity="high">'
+            '    <cdf:version>WNDF-AV-000001</cdf:version>'
+            '    <cdf:title>Defender AV must block PUA.</cdf:title>'
+            '    <cdf:fixtext fixref="F-1">Set PUAProtection to Enabled and Block.</cdf:fixtext>'
+            '    <cdf:fix id="F-1"/>'
+            '  </cdf:Rule>'
+            '</cdf:Group>'
+            '<cdf:Group id="xccdf_mil.disa.stig_group_V-213427">'
+            '  <cdf:Rule id="xccdf_mil.disa.stig_rule_SV-213427r961197_rule"'
+            '    severity="medium">'
+            '    <cdf:fixtext>Disable routine remediation policy.</cdf:fixtext>'
+            '  </cdf:Rule>'
+            '</cdf:Group>'
+            '</cdf:Benchmark>',
+            encoding="utf-8",
+        )
+        self.path = xml
+        self.bm = PARSER.parse(xml)
+
+    def teardown_method(self):
+        self.path.unlink(missing_ok=True)
+
+    def test_parses_successfully(self):
+        assert self.bm is not None
+
+    def test_benchmark_id(self):
+        assert "MS_Defender_Antivirus" in self.bm.benchmark_id
+
+    def test_title(self):
+        assert "Defender Antivirus" in self.bm.title
+
+    def test_rule_count(self):
+        assert len(self.bm.rules) == 2
+
+    def test_vuln_id_stripped_from_qualified_group_id(self):
+        rule = self.bm.rules.get("xccdf_mil.disa.stig_rule_SV-213426r961197_rule")
+        assert rule is not None
+        assert rule.vuln_id == "V-213426"
+
+    def test_severity_high(self):
+        rule = self.bm.rules.get("xccdf_mil.disa.stig_rule_SV-213426r961197_rule")
+        assert rule.severity == "CAT I"
+
+    def test_severity_medium(self):
+        rule = self.bm.rules.get("xccdf_mil.disa.stig_rule_SV-213427r961197_rule")
+        assert rule.severity == "CAT II"
+
+    def test_fix_text(self):
+        rule = self.bm.rules.get("xccdf_mil.disa.stig_rule_SV-213426r961197_rule")
+        assert "PUAProtection" in rule.fix_text
+
+
 class TestEdgeCases:
     def test_invalid_xml_returns_none(self, tmp_path):
         bad = tmp_path / "bad.xml"

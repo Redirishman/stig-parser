@@ -6,14 +6,14 @@ A Python tool that ingests XCCDF compliance scan results from multiple scanning 
 
 ## Supported Scanners
 
-| Scanner | Status |
-|---|---|
-| DISA SCC (SCAP Compliance Checker) | ✅ Tested |
-| OpenSCAP | ✅ Tested |
-| Nessus SCAP | ⚠️ Built from documentation — not yet validated with real output |
-| Evaluate-STIG | ⚠️ Built from documentation — not yet validated with real output |
+| Scanner | Status | Notes |
+|---|---|---|
+| DISA SCC (SCAP Compliance Checker) | ✅ Tested | **Self-contained** — result files embed full benchmark definitions, so a separate benchmark upload is not required |
+| OpenSCAP | ✅ Tested | Separate benchmark XML (or DISA ZIP) required |
+| Nessus SCAP | ⚠️ Built from documentation — not yet validated with real output | Separate benchmark XML required |
+| Evaluate-STIG | ⚠️ Built from documentation — not yet validated with real output | Separate benchmark XML required |
 
-Scanner type is auto-detected from XML namespace declarations and generator metadata — no manual tagging required.
+Scanner type is auto-detected from XML namespace declarations, the `test-system` attribute on `<TestResult>`, and generator metadata — no manual tagging required.
 
 ---
 
@@ -73,12 +73,15 @@ Start the Flask server:
 python -m flask --app app.web:create_app run
 ```
 
-Open `http://localhost:5000`. Upload your scan results files and STIG benchmark files, click **Process**, then download the Excel report.
+Open `http://localhost:5000`. Upload your scan results files (and, for non-SCC scanners, the matching STIG benchmark files), click **Process**, then download the Excel report.
 
 ### CLI
 
 ```bash
-# Directory inputs
+# SCC results — no separate benchmarks needed; result files are self-contained
+python -m app.cli --results ./scc-results/ --output findings.xlsx
+
+# Other scanners — supply benchmark XMLs or DISA ZIPs
 python -m app.cli --results ./results/ --benchmarks ./benchmarks/ --output findings.xlsx
 
 # Individual files
@@ -95,8 +98,8 @@ python -m app.cli --results ./results/ --benchmarks ./benchmarks/
 
 | Argument | Description |
 |---|---|
-| `--results` | Results file(s), directory, or glob pattern (required) |
-| `--benchmarks` | Benchmark file(s), directory, or glob pattern (required) |
+| `--results` | Results file(s), directory, or glob pattern (**required**) |
+| `--benchmarks` | Benchmark file(s), directory, or glob pattern. **Optional for SCC** — SCC result files embed their own benchmark definitions. Required for OpenSCAP / Nessus / Evaluate-STIG. |
 | `--output` | Output Excel path (default: `stig_findings_<timestamp>.xlsx`) |
 | `--verbose` | Enable detailed logging |
 
@@ -104,9 +107,9 @@ python -m app.cli --results ./results/ --benchmarks ./benchmarks/
 
 ## How It Works
 
-1. **Auto-detect scanner** — inspects XML namespaces and generator metadata
+1. **Auto-detect scanner** — inspects XML namespaces, the `test-system` attribute, and generator metadata
 2. **Parse results** — extracts hostname, IP, benchmark reference, and all rule results from each XCCDF file
-3. **Parse benchmarks** — extracts STIG title, Vuln IDs, Rule IDs, severity, check text, and fix text from each STIG benchmark XML
+3. **Parse benchmarks** — extracts STIG title, Vuln IDs, Rule IDs, severity, check text, and fix text. For SCC scans the benchmark definitions live inside the same result files, so no separate benchmark upload is required
 4. **Match** — links each result file to its benchmark via the embedded `<benchmark>` reference; falls back to ID string matching
 5. **Filter** — retains only Open, Not Reviewed, Error, and Unknown findings; discards Pass, Not Applicable, etc.
 6. **Export** — generates a formatted Excel workbook with COUNTIFS formulas in the Summary sheet
