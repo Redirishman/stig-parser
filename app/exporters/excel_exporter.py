@@ -12,6 +12,18 @@ from app.parsers.base import Finding
 
 log = logging.getLogger(__name__)
 
+# Excel/Calc treat a leading =, +, -, @, or control char as a formula.
+# Scan-derived text (hostname, check/fix text) is attacker-controllable, so
+# any such value is prefixed with an apostrophe to force literal-text display.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "|", "\t", "\r")
+
+
+def _sanitize_cell(value: object) -> object:
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 _FILL_CAT_I = PatternFill("solid", fgColor="FFCCCC")
 _FILL_CAT_II = PatternFill("solid", fgColor="FFEB9C")
 _FILL_CAT_III = PatternFill("solid", fgColor="C6EFCE")
@@ -85,7 +97,7 @@ class ExcelExporter:
             for col_idx, (header, attr, _mw) in enumerate(_FINDINGS_COLS, start=1):
                 value = getattr(finding, attr, "")
                 wrap = header in _WRAP_HEADERS
-                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_cell(value))
                 cell.font = _BODY_FONT
                 cell.alignment = Alignment(
                     wrap_text=wrap,
@@ -155,8 +167,8 @@ class ExcelExporter:
         row += 1
 
         for server, ip in _unique_pairs(findings, "server", "ip_address"):
-            b(ws, row, 1, server)
-            b(ws, row, 2, ip)
+            b(ws, row, 1, _sanitize_cell(server))
+            b(ws, row, 2, _sanitize_cell(ip))
             for ci, sev in enumerate(severities, 3):
                 b(ws, row, ci, countifs2(_COL_SERVER, f'"{server}"', _COL_SEVERITY, f'"{sev}"'))
             b(ws, row, 6, f"=SUM(C{row}:E{row})")
@@ -171,7 +183,7 @@ class ExcelExporter:
         row += 1
 
         for stig in _unique_values(findings, "stig_title"):
-            b(ws, row, 1, stig)
+            b(ws, row, 1, _sanitize_cell(stig))
             for ci, sev in enumerate(severities, 2):
                 b(ws, row, ci, countifs2(_COL_STIG, f'"{stig}"', _COL_SEVERITY, f'"{sev}"'))
             b(ws, row, 5, f"=SUM(B{row}:D{row})")

@@ -8,6 +8,24 @@ from lxml import etree
 
 log = logging.getLogger(__name__)
 
+
+def _safe_xml_parse(path: Path) -> etree._ElementTree:
+    """Parse XML with entity resolution and network access disabled.
+
+    Scanner detection runs on the untrusted results file before the main
+    parser, so it must apply the same XXE / billion-laughs protections. A
+    fresh parser is created per call: lxml parser instances are not safe to
+    share across the worker threads the web app spawns.
+    """
+    parser = etree.XMLParser(
+        resolve_entities=False,
+        no_network=True,
+        dtd_validation=False,
+        load_dtd=False,
+    )
+    return etree.parse(str(path), parser)
+
+
 # Known scanner identifiers in order of specificity
 _SCANNER_SIGNATURES: list[tuple[str, str]] = [
     # (scanner_name, hint_string_lowercased)
@@ -34,7 +52,7 @@ def detect_scanner(path: Path) -> str:
     Returns one of: "SCC", "OpenSCAP", "Nessus", "Evaluate-STIG", or "Unknown".
     """
     try:
-        tree = etree.parse(str(path))
+        tree = _safe_xml_parse(path)
     except etree.XMLSyntaxError:
         log.warning("Cannot detect scanner — invalid XML in %s", path.name)
         return "Unknown"

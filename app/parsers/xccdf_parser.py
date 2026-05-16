@@ -11,6 +11,24 @@ from app.utils.scanner_detect import detect_scanner
 
 log = logging.getLogger(__name__)
 
+
+def _safe_xml_parse(path: Path) -> etree._ElementTree:
+    """Parse XML with entity resolution and network access disabled.
+
+    Untrusted uploads must not be able to read local files via XXE, reach
+    internal hosts via SSRF, or exhaust memory via billion-laughs entity
+    expansion. A fresh parser is created per call: lxml parser instances are
+    not safe to share across the worker threads the web app spawns.
+    """
+    parser = etree.XMLParser(
+        resolve_entities=False,
+        no_network=True,
+        dtd_validation=False,
+        load_dtd=False,
+    )
+    return etree.parse(str(path), parser)
+
+
 # XCCDF 1.2 namespace URI
 _NS_XCCDF_12 = "http://checklists.nist.gov/xccdf/1.2"
 
@@ -151,7 +169,7 @@ class XCCDFResultsParser(BaseParser):
         Returns None if the file cannot be parsed; logs a warning.
         """
         try:
-            tree = etree.parse(str(path))
+            tree = _safe_xml_parse(path)
         except etree.XMLSyntaxError as exc:
             log.warning("Skipping %s — invalid XML: %s", path.name, exc)
             return None

@@ -20,6 +20,7 @@ from flask import (
     send_file,
     session,
 )
+from werkzeug.utils import secure_filename
 
 from app.exporters.excel_exporter import ExcelExporter
 from app.parsers.benchmark_parser import BenchmarkParser
@@ -35,6 +36,25 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+
+# In-process submission rate limit, per client IP. Caps trivial DoS / disk
+# exhaustion from unauthenticated job spam without adding a dependency; not a
+# replacement for an upstream WAF or reverse-proxy limit.
+_RATE_MAX = 10
+_RATE_WINDOW = 60.0
+_rate_hits: dict[str, list[float]] = {}
+
+
+def _rate_limited(client_ip: str) -> bool:
+    now = time.time()
+    with _jobs_lock:
+        hits = [t for t in _rate_hits.get(client_ip, []) if now - t < _RATE_WINDOW]
+        if len(hits) >= _RATE_MAX:
+            _rate_hits[client_ip] = hits
+            return True
+        hits.append(now)
+        _rate_hits[client_ip] = hits
+    return False
 
 _TEMP_DIR = Path(os.environ.get("STIG_TEMP_DIR", Path(__file__).parent.parent / "tmp"))
 _ORPHAN_MAX_AGE_HOURS = 8
@@ -60,7 +80,15 @@ def _get_job(job_id: str) -> dict:
 
 def create_app(secret_key: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
-    app.secret_key = secret_key or os.environ.get("FLASK_SECRET_KEY", os.urandom(32))
+    _secret = secret_key or os.environ.get("FLASK_SECRET_KEY")
+    if not _secret:
+        log.warning(
+            "FLASK_SECRET_KEY is not set — using an ephemeral key. Sessions "
+            "will not survive a restart and will not work across multiple "
+            "workers. Set FLASK_SECRET_KEY for any non-local deployment."
+        )
+        _secret = os.urandom(32).hex()
+    app.secret_key = _secret
     app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB total upload
 
     _sweep_orphaned_jobs()
@@ -76,6 +104,9 @@ def create_app(secret_key: str | None = None) -> Flask:
 
     @app.route("/api/process", methods=["POST"])
     def process():
+        if _rate_limited(request.remote_addr or "unknown"):
+            return jsonify({"error": "Too many requests — slow down."}), 429
+
         results_files = request.files.getlist("results")
         benchmark_files = request.files.getlist("benchmarks")
 
@@ -95,13 +126,15 @@ def create_app(secret_key: str | None = None) -> Flask:
 
         for f in results_files:
             if f.filename:
-                dest = results_dir / Path(f.filename).name
+                safe_name = secure_filename(f.filename) or "upload.xml"
+                dest = results_dir / safe_name
                 f.save(str(dest))
                 saved_results.append(dest)
 
         for f in benchmark_files:
             if f.filename:
-                dest = benchmarks_dir / Path(f.filename).name
+                safe_name = secure_filename(f.filename) or "benchmark.xml"
+                dest = benchmarks_dir / safe_name
                 f.save(str(dest))
                 saved_benchmarks.append(dest)
 
@@ -126,6 +159,8 @@ def create_app(secret_key: str | None = None) -> Flask:
 
     @app.route("/api/status/<job_id>")
     def job_status(job_id: str):
+        if session.get("job_id") != job_id:
+            return jsonify({"error": "Job not found."}), 404
         job = _get_job(job_id)
         if not job:
             return jsonify({"error": "Job not found."}), 404
@@ -138,6 +173,8 @@ def create_app(secret_key: str | None = None) -> Flask:
 
     @app.route("/api/download/<job_id>")
     def download(job_id: str):
+        if session.get("job_id") != job_id:
+            return jsonify({"error": "Job not found."}), 404
         job = _get_job(job_id)
         if not job:
             return jsonify({"error": "Job not found."}), 404
@@ -302,4 +339,4 @@ def _sweep_orphaned_jobs() -> None:
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=False, host="127.0.0.1", port=5000)
