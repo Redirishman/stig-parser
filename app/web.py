@@ -8,7 +8,6 @@ import shutil
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import (
@@ -22,12 +21,13 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from app.exporters.excel_exporter import ExcelExporter
-from app.parsers.benchmark_parser import BenchmarkParser
-from app.parsers.xccdf_parser import XCCDFResultsParser
-from app.processors.filter import filter_findings
-from app.processors.matcher import match_results_to_benchmarks
-from app.utils.zip_extract import expand_benchmark_paths
+from app.core.pipeline import (
+    PipelineError,
+    compute_summary,
+    default_output_name,
+    export_stage,
+    parse_stage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -250,99 +250,39 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
     logging.getLogger("app").addHandler(log_handler)
 
     try:
-        # When no benchmark files were uploaded, SCC result files embed the full
-        # benchmark definitions — use the results files for both sides.
-        if not benchmark_paths:
-            benchmark_paths = list(results_paths)
-
-        # Expand any uploaded .zip benchmarks (DISA STIG distribution format)
-        _raise_if_cancelled(job_id)
-        _set_job(job_id, progress="Extracting benchmark archives…")
-        extract_dir = _job_dir(job_id) / "benchmarks_extracted"
-        benchmark_paths, zip_warnings = expand_benchmark_paths(benchmark_paths, extract_dir)
-        warnings.extend(zip_warnings)
-
-        # Parse benchmarks
-        _set_job(job_id, progress="Parsing benchmark files…", warnings=list(warnings))
-        benchmark_parser = BenchmarkParser()
-        benchmarks = []
-        for path in benchmark_paths:
+        def _cancel_check() -> None:
             _raise_if_cancelled(job_id)
-            bm = benchmark_parser.parse(path)
-            if bm:
-                benchmarks.append(bm)
-            else:
-                warnings.append(f"Could not parse benchmark: {path.name}")
 
-        # Parse results files
-        results_parser = XCCDFResultsParser()
-        scan_results = []
-        total = len(results_paths)
-        for i, path in enumerate(results_paths, start=1):
-            _raise_if_cancelled(job_id)
-            _set_job(job_id, progress=f"Parsing file {i} of {total}: {path.name}", warnings=list(warnings))
-            sr = results_parser.parse(path)
-            if sr:
-                scan_results.append(sr)
-            else:
-                warnings.append(f"Could not parse results file: {path.name}")
-
-        if not scan_results:
-            _set_job(job_id, status="error", error="No valid results files could be parsed.", warnings=list(warnings))
+        _set_job(job_id, progress="Parsing files…")
+        try:
+            result = parse_stage(
+                results_paths,
+                benchmark_paths,
+                _job_dir(job_id) / "benchmarks_extracted",
+                cancel_check=_cancel_check,
+            )
+        except PipelineError as exc:
+            _set_job(
+                job_id,
+                status="error",
+                error=str(exc),
+                warnings=list(warnings),
+            )
             return
 
-        # Match and filter
+        warnings.extend(result.warnings)
+
         _raise_if_cancelled(job_id)
-        _set_job(job_id, progress="Matching results to benchmarks…", warnings=list(warnings))
-        findings = match_results_to_benchmarks(scan_results, benchmarks)
+        _set_job(job_id, progress="Generating Excel workbook…", warnings=list(warnings))
+        output_path = _job_dir(job_id) / default_output_name()
+        export_stage(result.findings, output_path)
 
-        _set_job(job_id, progress="Filtering findings…")
-        findings = filter_findings(findings)
-
-        if not findings:
-            total_rules = sum(len(s.rule_results) for s in scan_results)
-            if total_rules == 0:
-                msg = (
-                    f"No <rule-result> elements were found in any of the "
-                    f"{len(scan_results)} results file(s). The files may not be "
-                    f"XCCDF scan results, or may use an unrecognised structure. "
-                    f"Check the warnings below for details."
-                )
-            else:
-                msg = (
-                    f"Parsed {total_rules} rule-result(s) across "
-                    f"{len(scan_results)} file(s), but none had an actionable "
-                    f"status (Open / Not Reviewed / Error / Unknown). Either "
-                    f"every rule passed, or the results were not matched to "
-                    f"the supplied STIG benchmarks. Check the warnings below."
-                )
-            _set_job(job_id, status="error", error=msg, warnings=list(warnings))
-            return
-
-        # Export
-        _raise_if_cancelled(job_id)
-        _set_job(job_id, progress="Generating Excel workbook…")
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_path = _job_dir(job_id) / f"stig_findings_{timestamp}.xlsx"
-        ExcelExporter().export(findings, output_path)
-
-        severity_counts = {"CAT I": 0, "CAT II": 0, "CAT III": 0}
-        for f in findings:
-            if f.severity in severity_counts:
-                severity_counts[f.severity] += 1
-        summary = {
-            "files": len(scan_results),
-            "hosts": len({f.server for f in findings if f.server}),
-            "findings": len(findings),
-            "cat1": severity_counts["CAT I"],
-            "cat2": severity_counts["CAT II"],
-            "cat3": severity_counts["CAT III"],
-        }
+        summary = compute_summary(result.findings, result.source_file_count)
 
         _set_job(
             job_id,
             status="complete",
-            progress=f"Done — {len(findings)} findings exported.",
+            progress=f"Done — {len(result.findings)} findings exported.",
             output_path=str(output_path),
             warnings=list(warnings),
             summary=summary,
