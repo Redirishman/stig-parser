@@ -151,3 +151,50 @@ class TestDownloadRoute:
     def test_unknown_job_returns_404(self, client):
         r = client.get("/api/download/nonexistent-job-id")
         assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /api/cancel
+# ---------------------------------------------------------------------------
+
+class TestCancelRoute:
+    def test_unknown_job_returns_404(self, client):
+        r = client.post("/api/cancel/nonexistent-job-id")
+        assert r.status_code == 404
+
+    def test_cancel_finished_job_reports_final_status(self, client):
+        data = {"results": _make_upload(FIXTURES / "scc_results.xml")}
+        post = client.post("/api/process", data=data, content_type="multipart/form-data")
+        job_id = post.get_json()["job_id"]
+        final = _wait_for_completion(client, job_id)
+
+        r = client.post(f"/api/cancel/{job_id}")
+        assert r.status_code == 200
+        assert r.get_json()["status"] == final["status"]
+
+    def test_cancel_running_job_sets_flag_and_worker_honors_it(self, client):
+        import app.web as web
+
+        job_id = "cancel-test-job"
+        web._set_job(job_id, status="running", progress="working", warnings=[])
+        with client.session_transaction() as sess:
+            sess["job_id"] = job_id
+
+        r = client.post(f"/api/cancel/{job_id}")
+        assert r.status_code == 200
+        assert r.get_json()["status"] == "cancelling"
+        assert web._get_job(job_id).get("cancelled") is True
+
+        with pytest.raises(web._JobCancelled):
+            web._raise_if_cancelled(job_id)
+
+    def test_status_endpoint_reports_cancelled(self, client):
+        import app.web as web
+
+        job_id = "cancelled-status-job"
+        web._set_job(job_id, status="cancelled", progress="Cancelled.", warnings=[])
+        with client.session_transaction() as sess:
+            sess["job_id"] = job_id
+
+        r = client.get(f"/api/status/{job_id}")
+        assert r.get_json()["status"] == "cancelled"

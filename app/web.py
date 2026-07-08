@@ -102,6 +102,21 @@ def create_app(secret_key: str | None = None) -> Flask:
         job_id = session.get("job_id")
         return render_template("index.html", existing_job_id=job_id)
 
+    @app.route("/readme")
+    def readme():
+        readme_path = Path(__file__).parent.parent / "README.md"
+        if not readme_path.is_file():
+            return Response(
+                "README not bundled with this deployment. "
+                "See the project repository for documentation.",
+                status=404,
+                mimetype="text/plain",
+            )
+        return Response(
+            readme_path.read_text(encoding="utf-8"),
+            mimetype="text/plain; charset=utf-8",
+        )
+
     @app.route("/api/process", methods=["POST"])
     def process():
         if _rate_limited(request.remote_addr or "unknown"):
@@ -169,7 +184,21 @@ def create_app(secret_key: str | None = None) -> Flask:
             "progress": job.get("progress", ""),
             "warnings": job.get("warnings", []),
             "error": job.get("error", ""),
+            "summary": job.get("summary"),
         })
+
+    @app.route("/api/cancel/<job_id>", methods=["POST"])
+    def cancel(job_id: str):
+        if session.get("job_id") != job_id:
+            return jsonify({"error": "Job not found."}), 404
+        job = _get_job(job_id)
+        if not job:
+            return jsonify({"error": "Job not found."}), 404
+        if job.get("status") != "running":
+            # Already finished — report the final state so the UI can proceed.
+            return jsonify({"status": job.get("status")})
+        _set_job(job_id, cancelled=True)
+        return jsonify({"status": "cancelling"})
 
     @app.route("/api/download/<job_id>")
     def download(job_id: str):
@@ -206,6 +235,15 @@ def create_app(secret_key: str | None = None) -> Flask:
 # Background processing
 # ---------------------------------------------------------------------------
 
+class _JobCancelled(Exception):
+    """Raised inside the worker thread when the user cancels the job."""
+
+
+def _raise_if_cancelled(job_id: str) -> None:
+    if _get_job(job_id).get("cancelled"):
+        raise _JobCancelled()
+
+
 def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]) -> None:
     warnings: list[str] = []
     log_handler = _WarningCollector(warnings)
@@ -218,6 +256,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             benchmark_paths = list(results_paths)
 
         # Expand any uploaded .zip benchmarks (DISA STIG distribution format)
+        _raise_if_cancelled(job_id)
         _set_job(job_id, progress="Extracting benchmark archives…")
         extract_dir = _job_dir(job_id) / "benchmarks_extracted"
         benchmark_paths, zip_warnings = expand_benchmark_paths(benchmark_paths, extract_dir)
@@ -228,6 +267,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
         benchmark_parser = BenchmarkParser()
         benchmarks = []
         for path in benchmark_paths:
+            _raise_if_cancelled(job_id)
             bm = benchmark_parser.parse(path)
             if bm:
                 benchmarks.append(bm)
@@ -239,6 +279,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
         scan_results = []
         total = len(results_paths)
         for i, path in enumerate(results_paths, start=1):
+            _raise_if_cancelled(job_id)
             _set_job(job_id, progress=f"Parsing file {i} of {total}: {path.name}", warnings=list(warnings))
             sr = results_parser.parse(path)
             if sr:
@@ -251,6 +292,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             return
 
         # Match and filter
+        _raise_if_cancelled(job_id)
         _set_job(job_id, progress="Matching results to benchmarks…", warnings=list(warnings))
         findings = match_results_to_benchmarks(scan_results, benchmarks)
 
@@ -278,10 +320,24 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             return
 
         # Export
+        _raise_if_cancelled(job_id)
         _set_job(job_id, progress="Generating Excel workbook…")
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         output_path = _job_dir(job_id) / f"stig_findings_{timestamp}.xlsx"
         ExcelExporter().export(findings, output_path)
+
+        severity_counts = {"CAT I": 0, "CAT II": 0, "CAT III": 0}
+        for f in findings:
+            if f.severity in severity_counts:
+                severity_counts[f.severity] += 1
+        summary = {
+            "files": len(scan_results),
+            "hosts": len({f.server for f in findings if f.server}),
+            "findings": len(findings),
+            "cat1": severity_counts["CAT I"],
+            "cat2": severity_counts["CAT II"],
+            "cat3": severity_counts["CAT III"],
+        }
 
         _set_job(
             job_id,
@@ -289,8 +345,13 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             progress=f"Done — {len(findings)} findings exported.",
             output_path=str(output_path),
             warnings=list(warnings),
+            summary=summary,
         )
 
+    except _JobCancelled:
+        # Keep the job entry so status polls see "cancelled"; drop the files.
+        shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+        _set_job(job_id, status="cancelled", progress="Cancelled.", warnings=list(warnings))
     except Exception as exc:
         log.exception("Job %s failed with unhandled exception", job_id)
         _set_job(job_id, status="error", error=str(exc), warnings=list(warnings))
