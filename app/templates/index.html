@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>STIG Compliance Parser</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -15,6 +17,10 @@
 
     <main id="app">
 
+      <noscript>
+        <p class="noscript-note">This tool requires JavaScript to upload files and track processing. Enable JavaScript, or use the CLI: <code>stig-parser --help</code>.</p>
+      </noscript>
+
       <!-- Upload form -->
       <section id="upload-section">
         <form id="upload-form" enctype="multipart/form-data">
@@ -23,22 +29,35 @@
 
             <!-- Results drop zone -->
             <div class="upload-zone" id="results-zone">
-              <div class="zone-icon">&#128196;</div>
+              <div class="zone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <path d="M14 2v6h6"/>
+                  <path d="M9 13h6M9 17h6"/>
+                </svg>
+              </div>
               <h2>Scan Results</h2>
               <p>XCCDF results files from SCC, OpenSCAP, Nessus, or Evaluate-STIG</p>
-              <label class="btn btn-secondary" for="results-input">Choose Files</label>
+              <button type="button" class="btn btn-secondary" id="results-browse">Choose Files</button>
               <input type="file" id="results-input" name="results" multiple accept=".xml" hidden>
-              <div class="file-list" id="results-file-list"></div>
+              <p class="zone-notice" id="results-zone-notice" role="status" hidden></p>
+              <ul class="file-list" id="results-file-list"></ul>
             </div>
 
             <!-- Benchmark drop zone -->
             <div class="upload-zone" id="benchmarks-zone">
-              <div class="zone-icon">&#128218;</div>
+              <div class="zone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                </svg>
+              </div>
               <h2>STIG Benchmarks <span class="badge-optional">Optional for SCC</span></h2>
               <p>STIG benchmark XML or ZIP files from DISA (public.cyber.mil). Not needed when uploading SCC result files.</p>
-              <label class="btn btn-secondary" for="benchmarks-input">Choose Files</label>
+              <button type="button" class="btn btn-secondary" id="benchmarks-browse">Choose Files</button>
               <input type="file" id="benchmarks-input" name="benchmarks" multiple accept=".xml,.zip" hidden>
-              <div class="file-list" id="benchmarks-file-list"></div>
+              <p class="zone-notice" id="benchmarks-zone-notice" role="status" hidden></p>
+              <ul class="file-list" id="benchmarks-file-list"></ul>
             </div>
 
           </div><!-- /.upload-grid -->
@@ -55,31 +74,55 @@
       <!-- Progress / status section (hidden until job starts) -->
       <section id="progress-section" hidden>
         <h2>Processing</h2>
-        <div class="progress-bar-wrap">
-          <div class="progress-bar" id="progress-bar"></div>
+        <div class="activity-log" id="activity-log" role="log" aria-live="polite"></div>
+        <p id="stall-note" class="progress-text stall-note" aria-live="polite" hidden>Still working &mdash; large files can take a few minutes.</p>
+        <div class="progress-actions">
+          <button type="button" class="btn btn-secondary" id="cancel-btn">Cancel</button>
         </div>
-        <p id="progress-text" class="progress-text">Starting&hellip;</p>
 
-        <div id="warnings-box" class="warnings-box" hidden>
+        <div id="warnings-box" class="warnings-box" aria-live="polite" hidden>
           <h3>Warnings</h3>
+          <p class="warnings-lead">The report will still be generated. Items below were skipped or incomplete &mdash; verify them before including the report in an accreditation package.</p>
           <ul id="warnings-list"></ul>
         </div>
       </section>
 
       <!-- Result section (hidden until complete) -->
       <section id="result-section" hidden>
-        <div class="result-card success" id="result-success" hidden>
-          <div class="result-icon">&#10003;</div>
+        <div class="result-card success" id="result-success" role="status" hidden>
+          <div class="result-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6 9 17l-5-5" pathLength="1"/>
+            </svg>
+          </div>
           <h2>Report Ready</h2>
+          <dl class="report-summary" id="report-summary" hidden>
+            <div class="summary-row"><dt>Result files</dt><dd id="sum-files"></dd></div>
+            <div class="summary-row"><dt>Hosts</dt><dd id="sum-hosts"></dd></div>
+            <div class="summary-row summary-total"><dt>Findings</dt><dd id="sum-findings"></dd></div>
+            <div class="summary-row summary-cat"><dt>CAT I &mdash; high</dt><dd id="sum-cat1"></dd></div>
+            <div class="summary-row summary-cat"><dt>CAT II &mdash; medium</dt><dd id="sum-cat2"></dd></div>
+            <div class="summary-row summary-cat"><dt>CAT III &mdash; low</dt><dd id="sum-cat3"></dd></div>
+          </dl>
+          <p class="summary-note" id="summary-note" hidden>Severity counts are zero because the results were not matched to a STIG benchmark &mdash; see the warnings below.</p>
           <a id="download-link" href="#" class="btn btn-primary">Download Excel Report</a>
           <button class="btn btn-secondary" id="reset-btn">Process Another Set</button>
+          <div id="success-warnings-box" class="warnings-box" hidden>
+            <h3>Warnings from this run</h3>
+            <p class="warnings-lead">The report was generated, but the items below were skipped or incomplete &mdash; verify them before including the report in an accreditation package.</p>
+            <ul id="success-warnings-list"></ul>
+          </div>
         </div>
-        <div class="result-card error" id="result-error" hidden>
-          <div class="result-icon">&#10007;</div>
+        <div class="result-card error" id="result-error" role="alert" hidden>
+          <div class="result-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </div>
           <h2>Processing Failed</h2>
           <p id="error-message"></p>
           <div id="error-warnings-box" class="warnings-box" hidden>
-            <h3>Warnings</h3>
+            <h3>Warnings recorded before the failure</h3>
             <ul id="error-warnings-list"></ul>
           </div>
           <button class="btn btn-secondary" id="reset-btn-error">Try Again</button>
@@ -90,7 +133,7 @@
 
     <footer>
       <p>Supports SCC &bull; OpenSCAP &bull; Nessus SCAP* &bull; Evaluate-STIG*</p>
-      <p class="small">* Built from documentation &mdash; not yet validated against real output. See README.</p>
+      <p class="small">* Built from documentation &mdash; not yet validated against real output. See the <a href="/readme">README</a>.</p>
     </footer>
   </div><!-- /.container -->
 
@@ -104,12 +147,16 @@
     const benchmarksZone  = document.getElementById('benchmarks-zone');
     const resultsFileList    = document.getElementById('results-file-list');
     const benchmarksFileList = document.getElementById('benchmarks-file-list');
+    const resultsBrowse      = document.getElementById('results-browse');
+    const benchmarksBrowse   = document.getElementById('benchmarks-browse');
+    const resultsZoneNotice    = document.getElementById('results-zone-notice');
+    const benchmarksZoneNotice = document.getElementById('benchmarks-zone-notice');
+    const stallNote          = document.getElementById('stall-note');
     const processBtn      = document.getElementById('process-btn');
     const uploadForm      = document.getElementById('upload-form');
     const uploadSection   = document.getElementById('upload-section');
     const progressSection = document.getElementById('progress-section');
-    const progressBar     = document.getElementById('progress-bar');
-    const progressText    = document.getElementById('progress-text');
+    const activityLog     = document.getElementById('activity-log');
     const warningsBox          = document.getElementById('warnings-box');
     const warningsList         = document.getElementById('warnings-list');
     const errorWarningsBox     = document.getElementById('error-warnings-box');
@@ -123,6 +170,10 @@
     let pollTimer = null;
     let currentJobId = '{{ existing_job_id or "" }}';
     let lastWarnings = [];  // most recent warnings list, for showing on error
+    let lastSummary = null; // findings summary from the completed job
+    let pollFailures = 0;   // consecutive failed status fetches
+    let lastProgressMsg = '';
+    let unchangedPolls = 0; // consecutive polls with identical progress text
 
     // ------------------------------------------------------------------
     // File input + drag-and-drop
@@ -153,7 +204,7 @@
         removeBtn.className = 'file-remove';
         removeBtn.setAttribute('aria-label', 'Remove ' + f.name);
         removeBtn.title = 'Remove';
-        removeBtn.textContent = '✕';  // ✕
+        removeBtn.textContent = '✕';
         removeBtn.addEventListener('click', function (e) {
           e.stopPropagation();
           removeFileAt(input, listEl, i);
@@ -165,14 +216,25 @@
       updateProcessBtn();
     }
 
-    function setupZone(zone, input, listEl, allowedExts) {
+    function showZoneNotice(noticeEl, msg) {
+      noticeEl.textContent = msg;
+      noticeEl.hidden = !msg;
+    }
+
+    function setupZone(zone, input, listEl, browseBtn, noticeEl, allowedExts) {
+      browseBtn.addEventListener('click', function () {
+        input.click();
+      });
+
       zone.addEventListener('click', function (e) {
-        if (e.target === zone || e.target.tagName === 'P' || e.target.tagName === 'H2' || e.target.className === 'zone-icon') {
-          input.click();
-        }
+        // Whole zone opens the picker, except clicks on real controls
+        // (browse button has its own handler; file rows have remove buttons).
+        if (e.target.closest('button') || e.target.closest('.file-list')) return;
+        input.click();
       });
 
       input.addEventListener('change', function () {
+        showZoneNotice(noticeEl, '');
         updateFileList(input, listEl);
       });
 
@@ -190,17 +252,26 @@
         zone.classList.remove('dragover');
         // Transfer dropped files into the input, filtering by allowed extensions
         const dt = new DataTransfer();
-        Array.from(e.dataTransfer.files).filter(function (f) {
+        let skipped = 0;
+        Array.from(e.dataTransfer.files).forEach(function (f) {
           const lower = f.name.toLowerCase();
-          return allowedExts.some(function (ext) { return lower.endsWith(ext); });
-        }).forEach(function (f) { dt.items.add(f); });
+          if (allowedExts.some(function (ext) { return lower.endsWith(ext); })) {
+            dt.items.add(f);
+          } else {
+            skipped++;
+          }
+        });
         input.files = dt.files;
+        showZoneNotice(noticeEl, skipped > 0
+          ? skipped + (skipped === 1 ? ' file skipped — only ' : ' files skipped — only ')
+            + allowedExts.join(' / ') + ' accepted here.'
+          : '');
         updateFileList(input, listEl);
       });
     }
 
-    setupZone(resultsZone, resultsInput, resultsFileList, ['.xml']);
-    setupZone(benchmarksZone, benchmarksInput, benchmarksFileList, ['.xml', '.zip']);
+    setupZone(resultsZone, resultsInput, resultsFileList, resultsBrowse, resultsZoneNotice, ['.xml']);
+    setupZone(benchmarksZone, benchmarksInput, benchmarksFileList, benchmarksBrowse, benchmarksZoneNotice, ['.xml', '.zip']);
 
     function updateProcessBtn() {
       const hasResults = resultsInput.files && resultsInput.files.length > 0;
@@ -221,7 +292,12 @@
       resultError.hidden = true;
       warningsBox.hidden = true;
       warningsList.innerHTML = '';
-      setProgress(5, 'Uploading files…');
+      pollFailures = 0;
+      unchangedPolls = 0;
+      lastProgressMsg = '';
+      stallNote.hidden = true;
+      activityLog.innerHTML = '';
+      logLine('Uploading files…');
 
       fetch('/api/process', { method: 'POST', body: fd })
         .then(function (r) { return r.json(); })
@@ -233,8 +309,8 @@
           currentJobId = data.job_id;
           startPolling(currentJobId);
         })
-        .catch(function (err) {
-          showError('Upload failed: ' + err.message);
+        .catch(function () {
+          showError('Could not reach the server to upload files. Check that the app is still running, then try again.');
         });
     });
 
@@ -247,43 +323,76 @@
       pollTimer = setInterval(function () { poll(jobId); }, 1000);
     }
 
+    // Append a timestamped line to the activity log (skips empty messages)
+    function logLine(msg) {
+      if (!msg) return;
+      const line = document.createElement('div');
+      line.className = 'log-line';
+
+      const time = document.createElement('span');
+      time.className = 'log-time';
+      const now = new Date();
+      time.textContent = [now.getHours(), now.getMinutes(), now.getSeconds()]
+        .map(function (n) { return String(n).padStart(2, '0'); })
+        .join(':');
+      line.appendChild(time);
+
+      line.appendChild(document.createTextNode(' ' + msg));
+      activityLog.appendChild(line);
+      activityLog.scrollTop = activityLog.scrollHeight;
+    }
+
     function poll(jobId) {
       fetch('/api/status/' + jobId)
         .then(function (r) { return r.json(); })
         .then(function (data) {
+          pollFailures = 0;
+
           // Capture warnings first so they're available to showError below
-          progressText.textContent = data.progress || '';
           showWarnings(data.warnings || []);
+
+          // Log each new step; reassure the user if a step runs ~20s silent
+          if ((data.progress || '') === lastProgressMsg) {
+            unchangedPolls++;
+            if (unchangedPolls >= 20) stallNote.hidden = false;
+          } else {
+            lastProgressMsg = data.progress || '';
+            unchangedPolls = 0;
+            stallNote.hidden = true;
+            logLine(lastProgressMsg);
+          }
 
           if (data.status === 'complete') {
             clearInterval(pollTimer);
-            setProgress(100, data.progress);
+            lastSummary = data.summary || null;
             showSuccess(jobId);
+          } else if (data.status === 'cancelled') {
+            clearInterval(pollTimer);
+            softReset(); // back to the upload form; file selections kept
           } else if (data.status === 'error') {
             clearInterval(pollTimer);
             showError(data.error || 'An unknown error occurred.');
           } else if (data.error) {
             // 404 or other transport-level error from the status endpoint
             showError(data.error);
-          } else {
-            // Animate progress bar during running state
-            const current = parseInt(progressBar.style.width) || 10;
-            setProgress(Math.min(current + 5, 90), data.progress);
           }
         })
         .catch(function () {
-          // Network hiccup — keep polling
+          // Network hiccup — tolerate a few, then give up with a clear message
+          pollFailures++;
+          if (pollFailures >= 10) {
+            showError('Lost contact with the server. The job may still be running — try reloading the page to reconnect.');
+          }
         });
     }
 
-    function setProgress(pct, text) {
-      progressBar.style.width = pct + '%';
-      if (text) progressText.textContent = text;
-    }
-
     function showWarnings(warnings) {
-      lastWarnings = warnings || [];
-      if (!warnings || warnings.length === 0) return;
+      warnings = warnings || [];
+      // Skip identical re-renders: the box is aria-live, and rebuilding it on
+      // every poll would re-announce the same warnings to screen readers.
+      const changed = JSON.stringify(warnings) !== JSON.stringify(lastWarnings);
+      lastWarnings = warnings;
+      if (warnings.length === 0 || !changed) return;
       warningsList.innerHTML = '';
       warnings.forEach(function (w) {
         const li = document.createElement('li');
@@ -298,6 +407,45 @@
       resultSection.hidden = false;
       resultSuccess.hidden = false;
       downloadLink.href = '/api/download/' + jobId;
+      renderSummary(lastSummary);
+      // Warnings must survive into the end state — they gate whether the
+      // report can go into an accreditation package as-is.
+      const box = document.getElementById('success-warnings-box');
+      const list = document.getElementById('success-warnings-list');
+      list.innerHTML = '';
+      if (lastWarnings && lastWarnings.length > 0) {
+        lastWarnings.forEach(function (w) {
+          const li = document.createElement('li');
+          li.textContent = w;
+          list.appendChild(li);
+        });
+        box.hidden = false;
+      } else {
+        box.hidden = true;
+      }
+    }
+
+    function renderSummary(s) {
+      const box = document.getElementById('report-summary');
+      if (!s) {
+        box.hidden = true;
+        document.getElementById('summary-note').hidden = true;
+        return;
+      }
+      document.getElementById('sum-files').textContent    = s.files;
+      document.getElementById('sum-hosts').textContent    = s.hosts;
+      document.getElementById('sum-findings').textContent = s.findings;
+      document.getElementById('sum-cat1').textContent     = s.cat1;
+      document.getElementById('sum-cat2').textContent     = s.cat2;
+      document.getElementById('sum-cat3').textContent     = s.cat3;
+      // CAT I count is the number that matters — flag it when non-zero
+      const cat1Row = document.getElementById('sum-cat1').parentElement;
+      cat1Row.classList.toggle('summary-cat1-open', s.cat1 > 0);
+      // All-zero severity with findings present means benchmark matching
+      // failed — surface that instead of letting 0/0/0 look like good news.
+      document.getElementById('summary-note').hidden =
+        !(s.findings > 0 && s.cat1 + s.cat2 + s.cat3 === 0);
+      box.hidden = false;
     }
 
     function showError(msg) {
@@ -324,9 +472,19 @@
     // Reset
     // ------------------------------------------------------------------
 
-    function resetUI() {
+    // Shared section/status reset. Does NOT touch file selections.
+    function resetSections() {
       currentJobId = '';
       lastWarnings = [];
+      lastSummary = null;
+      document.getElementById('report-summary').hidden = true;
+      document.getElementById('summary-note').hidden = true;
+      document.getElementById('success-warnings-box').hidden = true;
+      document.getElementById('success-warnings-list').innerHTML = '';
+      pollFailures = 0;
+      unchangedPolls = 0;
+      lastProgressMsg = '';
+      stallNote.hidden = true;
       uploadSection.hidden = false;
       progressSection.hidden = true;
       resultSection.hidden = true;
@@ -336,16 +494,47 @@
       warningsList.innerHTML = '';
       errorWarningsBox.hidden = true;
       errorWarningsList.innerHTML = '';
+      activityLog.innerHTML = '';
+      document.getElementById('cancel-btn').disabled = false;
+    }
+
+    // Full reset after a successful run: clear file selections too.
+    function resetUI() {
+      resetSections();
       resultsFileList.innerHTML = '';
       benchmarksFileList.innerHTML = '';
       resultsInput.value = '';
       benchmarksInput.value = '';
+      showZoneNotice(resultsZoneNotice, '');
+      showZoneNotice(benchmarksZoneNotice, '');
       processBtn.disabled = true;
-      setProgress(0, '');
+    }
+
+    // Soft reset after an error: keep the user's file selections intact.
+    function softReset() {
+      resetSections();
+      updateProcessBtn();
     }
 
     document.getElementById('reset-btn').addEventListener('click', resetUI);
-    document.getElementById('reset-btn-error').addEventListener('click', resetUI);
+    document.getElementById('reset-btn-error').addEventListener('click', softReset);
+
+    const cancelBtn = document.getElementById('cancel-btn');
+    cancelBtn.addEventListener('click', function () {
+      if (!currentJobId) return;
+      cancelBtn.disabled = true;
+      logLine('Cancelling…');
+      fetch('/api/cancel/' + currentJobId, { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          // Job may have finished before the cancel landed — let polling
+          // handle "complete"/"error"; "cancelled" also arrives via polling.
+          if (data.error) cancelBtn.disabled = false;
+        })
+        .catch(function () {
+          cancelBtn.disabled = false;
+        });
+    });
 
     // ------------------------------------------------------------------
     // Reconnect to an in-progress job from a previous page load
@@ -359,8 +548,10 @@
             uploadSection.hidden = true;
             progressSection.hidden = false;
             if (data.status === 'complete') {
+              lastSummary = data.summary || null;
               showSuccess(currentJobId);
             } else {
+              logLine('Reconnected to running job…');
               startPolling(currentJobId);
             }
           }
