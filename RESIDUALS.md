@@ -6,7 +6,7 @@ rate limit, CLI temp cleanup). Items below are MED/LOW hardening only.
 
 Apply all 5, run `pytest tests/ -v`, then commit. App is Python Flask/lxml.
 
-## 1. MED — Error-detail leak (`app/web.py:294-296`)
+## 1. MED — Error-detail leak (`app/web.py`) — ✅ RESOLVED in `895ff51`
 `except Exception as exc:` handler ships `str(exc)` to client via `/api/status`.
 Keep `log.exception(...)` at :295. Change the `_set_job` call:
 
