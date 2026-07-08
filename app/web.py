@@ -292,9 +292,16 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
         # Keep the job entry so status polls see "cancelled"; drop the files.
         shutil.rmtree(_job_dir(job_id), ignore_errors=True)
         _set_job(job_id, status="cancelled", progress="Cancelled.", warnings=list(warnings))
-    except Exception as exc:
+    except Exception:
+        # Never surface internal exception detail to the client (leaks paths,
+        # library internals, etc.). The full traceback goes to the server log.
         log.exception("Job %s failed with unhandled exception", job_id)
-        _set_job(job_id, status="error", error=str(exc), warnings=list(warnings))
+        _set_job(
+            job_id,
+            status="error",
+            error="Processing failed — see server logs.",
+            warnings=list(warnings),
+        )
     finally:
         logging.getLogger("app").removeHandler(log_handler)
 
