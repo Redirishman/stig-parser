@@ -117,7 +117,7 @@ def parse_stage(
     )
 
 
-def compute_summary(findings: list[Finding], source_file_count: int) -> dict:
+def compute_summary(findings: list[Finding], source_file_count: int) -> dict[str, int]:
     """Build the summary dict shown in the UI after a successful run."""
     severity_counts = {"CAT I": 0, "CAT II": 0, "CAT III": 0}
     for f in findings:

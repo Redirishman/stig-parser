@@ -52,6 +52,50 @@ def test_default_output_name_is_timestamped_xlsx():
     assert name.endswith(".xlsx")
 
 
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_parse_stage_happy_path_yields_findings(tmp_path):
+    fixture = FIXTURES / "scc_results.xml"
+    assert fixture.exists(), f"missing fixture: {fixture}"
+    # benchmark_paths=[] also exercises the "no benchmarks supplied → use
+    # results files as benchmarks" fallback branch.
+    result = parse_stage([fixture], [], tmp_path / "e")
+    assert isinstance(result, ParseResult)
+    assert result.source_file_count == 1
+    assert isinstance(result.findings, list)
+    assert all(isinstance(f, Finding) for f in result.findings)
+    assert len(result.findings) == 5
+
+
+_ALL_PASS_XCCDF = """<?xml version="1.0" encoding="UTF-8"?>
+<cdf:TestResult xmlns:cdf="http://checklists.nist.gov/xccdf/1.2"
+    id="xccdf_mil.disa.scc_testresult_test" version="1.0">
+  <cdf:benchmark href="test-xccdf.xml" id="xccdf_test_benchmark"/>
+  <cdf:title>All-pass results</cdf:title>
+  <cdf:target>HOST-A</cdf:target>
+  <cdf:target-address>10.0.0.5</cdf:target-address>
+  <cdf:rule-result idref="xccdf_test_rule_SV-1r1_rule" severity="high">
+    <cdf:result>pass</cdf:result>
+  </cdf:rule-result>
+  <cdf:rule-result idref="xccdf_test_rule_SV-2r1_rule" severity="medium">
+    <cdf:result>pass</cdf:result>
+  </cdf:rule-result>
+</cdf:TestResult>
+"""
+
+
+def test_parse_stage_raises_when_rules_present_but_none_actionable(tmp_path):
+    # rule-results parse successfully (total_rules > 0) but all pass, so the
+    # actionable-status filter yields zero findings — the "actionable status"
+    # PipelineError branch.
+    src = tmp_path / "all_pass.xml"
+    src.write_text(_ALL_PASS_XCCDF, encoding="utf-8")
+    with pytest.raises(PipelineError) as exc:
+        parse_stage([src], [], tmp_path / "e")
+    assert "actionable status" in str(exc.value).lower()
+
+
 def test_parse_stage_raises_pipelineerror_when_no_results_parse(tmp_path):
     bad = tmp_path / "not_xccdf.xml"
     bad.write_text("<html><body>nope</body></html>", encoding="utf-8")
