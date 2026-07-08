@@ -51,6 +51,45 @@ def test_run_export_stage_reads_findings_and_writes_report(tmp_path):
     assert job["summary"]["findings"] == 1
 
 
+def test_run_parse_stage_rejects_traversal_filename(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    jobs = MemoryJobStore()
+    job_id = "jobT"
+    jobs.create(job_id, status="running")
+
+    outside = tmp_path / "outside_target.xml"
+    result = run_parse_stage(
+        job_id,
+        ["../../outside_target.xml"],
+        store,
+        jobs,
+        work_dir=tmp_path / "w",
+    )
+    assert result is False
+    assert jobs.get(job_id)["status"] == "error"
+    assert jobs.get(job_id)["error"] == "Invalid input filename."
+    # Nothing was written outside the job work dir.
+    assert not outside.exists()
+
+
+def test_run_parse_stage_error_message_is_generic_on_unexpected_failure(tmp_path):
+    # findings path is fine, but force an unexpected failure by pointing the
+    # export stage at un-decodable findings JSON; assert no internal detail leaks.
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    jobs = MemoryJobStore()
+    job_id = "jobG"
+    jobs.create(job_id, status="running")
+    store.put_bytes(FINDINGS_KEY.format(job_id=job_id), b"not valid json{")
+
+    ok = run_export_stage(job_id, store, jobs, work_dir=tmp_path / "w")
+    assert ok is False
+    err = jobs.get(job_id)["error"]
+    assert err == "Export failed — see server logs."
+    # Must not contain exception/library internals.
+    assert "json" not in err.lower()
+    assert "Traceback" not in err
+
+
 def test_findings_key_roundtrips_through_store(tmp_path):
     store = LocalArtifactStore(tmp_path / "artifacts")
     job_id = "job3"

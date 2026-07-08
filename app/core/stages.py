@@ -29,6 +29,22 @@ FINDINGS_KEY = "jobs/{job_id}/findings.json"
 REPORT_KEY = "jobs/{job_id}/report.xlsx"
 
 
+def _is_safe_name(name: str) -> bool:
+    """True if ``name`` is a bare filename safe to join onto a local path.
+
+    Input filenames originate from user uploads; a value containing path
+    separators or ``..`` (or an absolute path) could escape the job work
+    directory when joined, so those are rejected outright.
+    """
+    return (
+        bool(name)
+        and "/" not in name
+        and "\\" not in name
+        and ".." not in name
+        and not Path(name).is_absolute()
+    )
+
+
 def run_parse_stage(
     job_id: str,
     input_filenames: list[str],
@@ -49,21 +65,31 @@ def run_parse_stage(
 
     jobs.update(job_id, status="running", progress="Parsing files…")
 
-    local_inputs: list[Path] = []
-    prefix = INPUT_PREFIX.format(job_id=job_id)
+    # Validate up front: reject any filename that could traverse out of the
+    # job work directory when joined onto a local path.
     for name in input_filenames:
-        dest = input_dir / name
-        store.download_to(f"{prefix}/{name}", dest)
-        local_inputs.append(dest)
+        if not _is_safe_name(name):
+            log.warning("rejected unsafe input filename for job %s: %r", job_id, name)
+            jobs.update(job_id, status="error", error="Invalid input filename.")
+            return False
 
+    prefix = INPUT_PREFIX.format(job_id=job_id)
     try:
+        local_inputs: list[Path] = []
+        for name in input_filenames:
+            dest = input_dir / name
+            store.download_to(f"{prefix}/{name}", dest)
+            local_inputs.append(dest)
         result = parse_stage(local_inputs, [], extract_dir)
     except PipelineError as exc:
+        # PipelineError messages are curated and user-safe.
         jobs.update(job_id, status="error", error=str(exc))
         return False
-    except Exception as exc:  # unexpected — capture, don't leak a stack trace
+    except Exception:  # unexpected — capture without leaking internal detail
         log.exception("parse stage failed for job %s", job_id)
-        jobs.update(job_id, status="error", error=f"Parsing failed: {exc}")
+        jobs.update(
+            job_id, status="error", error="Parsing failed — see server logs."
+        )
         return False
 
     store.put_bytes(
@@ -102,13 +128,15 @@ def run_export_stage(
         out_path = work_dir / default_output_name()
         export_stage(findings, out_path)
         store.upload_from(REPORT_KEY.format(job_id=job_id), out_path)
-    except Exception as exc:
+        source_file_count = jobs.get(job_id).get("source_file_count", 0)
+        summary = compute_summary(findings, source_file_count)
+    except Exception:  # unexpected — capture without leaking internal detail
         log.exception("export stage failed for job %s", job_id)
-        jobs.update(job_id, status="error", error=f"Export failed: {exc}")
+        jobs.update(
+            job_id, status="error", error="Export failed — see server logs."
+        )
         return False
 
-    source_file_count = jobs.get(job_id).get("source_file_count", 0)
-    summary = compute_summary(findings, source_file_count)
     jobs.update(
         job_id,
         status="complete",

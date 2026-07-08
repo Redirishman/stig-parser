@@ -7,7 +7,7 @@ the only module here permitted to import boto3.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import boto3
 
@@ -77,7 +77,7 @@ class S3ArtifactStore:
     for the interface-endpoint host.
     """
 
-    def __init__(self, bucket: str, region: str, client=None):
+    def __init__(self, bucket: str, region: str, client: Any = None):
         self._bucket = bucket
         self._client = client or boto3.client("s3", region_name=region)
 

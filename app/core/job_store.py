@@ -54,9 +54,16 @@ class DynamoJobStore:
     are JSON-encoded into a ``data`` attribute so arbitrary nested structures
     (warnings lists, summary dicts) round-trip without per-field typing. The
     only member here permitted to touch boto3.
+
+    Concurrency: ``update`` is a non-atomic read-modify-write. Callers must
+    serialize updates per ``job_id`` (a single writer per job at a time).
+    Concurrent updates to the same job can lose fields (last full-record write
+    wins). If the async orchestration ever issues concurrent per-job updates,
+    switch this to optimistic concurrency (a ``version`` attribute guarded by a
+    ``ConditionExpression``).
     """
 
-    def __init__(self, table_name: str, region: str, client=None):
+    def __init__(self, table_name: str, region: str, client: Any = None):
         self._table = table_name
         self._client = client or boto3.client("dynamodb", region_name=region)
 
