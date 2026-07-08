@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+import boto3
+
 
 @runtime_checkable
 class ArtifactStore(Protocol):
@@ -65,3 +67,56 @@ class LocalArtifactStore:
 
     def presign_put(self, key: str, expires: int = 900) -> str:
         return self._resolve(key).as_uri()
+
+
+class S3ArtifactStore:
+    """S3-backed :class:`ArtifactStore`.
+
+    The only module member permitted to touch boto3. In GovCloud the client
+    reaches S3 through the VPC gateway endpoint; presigned URLs are generated
+    for the interface-endpoint host.
+    """
+
+    def __init__(self, bucket: str, region: str, client=None):
+        self._bucket = bucket
+        self._client = client or boto3.client("s3", region_name=region)
+
+    def put_bytes(self, key: str, data: bytes) -> None:
+        self._client.put_object(Bucket=self._bucket, Key=key, Body=data)
+
+    def get_bytes(self, key: str) -> bytes:
+        resp = self._client.get_object(Bucket=self._bucket, Key=key)
+        return resp["Body"].read()
+
+    def exists(self, key: str) -> bool:
+        from botocore.exceptions import ClientError
+
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=key)
+            return True
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
+
+    def upload_from(self, key: str, path: Path) -> None:
+        self._client.upload_file(str(path), self._bucket, key)
+
+    def download_to(self, key: str, path: Path) -> None:
+        dst = Path(path)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        self._client.download_file(self._bucket, key, str(dst))
+
+    def presign_get(self, key: str, expires: int = 900) -> str:
+        return self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": key},
+            ExpiresIn=expires,
+        )
+
+    def presign_put(self, key: str, expires: int = 900) -> str:
+        return self._client.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": self._bucket, "Key": key},
+            ExpiresIn=expires,
+        )
