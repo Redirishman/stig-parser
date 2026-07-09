@@ -90,6 +90,14 @@ Serverless, fully-private, event-driven. The existing deterministic parsing/expo
   - **Categorize / dedupe** — semantic clustering and duplicate reconciliation across scanners.
 - **Model access:** `bedrock-runtime:InvokeModel` on a Claude model in `us-gov-west-1`, via the Bedrock interface VPC endpoint. Prompt content = finding text; it stays inside the VPC via PrivateLink. Bedrock does not train on invocation data.
 
+### 4.1 Determinism & provenance (hard requirements for #4)
+
+- **Availability never decides silently.** Unavailability may *degrade* a run (deterministic report + loud "AI enrichment unavailable" warning in job status AND in the report itself); it must never silently produce a report that differs from what the user requested. Same scan + same request = same report shape, always.
+- **All AI-generated content is labeled.** Any Bedrock-drafted text in the Excel report or POA&M output is explicitly marked as AI-drafted, pending human review. Unlabeled LLM text must never appear in accreditation artifacts.
+- **Provenance stamped in job metadata:** model ID, prompt version, `aiRequested`, `aiRan`. Every report is auditable and reproducible.
+- **Gate transparency:** the job record states *which* gate blocked AI when it did not run — `ai: disabled-by-request | disabled-globally | failed | done`.
+- **Cost/runtime guardrails designed in, not bolted on:** cap on findings enriched per job, batching strategy, summarize-above-threshold fallback. Rate limiting in the enricher — GovCloud Bedrock quotas are low.
+
 ---
 
 ## 5. Backend Re-Architecture (Sub-project #1 — foundation)
@@ -109,6 +117,10 @@ The current `web.py` couples request → parse → export synchronously. The exi
 - Modules: `network` (VPC, subnets, endpoints), `storage` (S3 + KMS + lifecycle), `data` (DynamoDB), `compute` (Lambdas, layers), `orchestration` (Step Functions), `api` (Private API GW + resource policy), `iam` (least-priv roles), `observability` (log groups, CloudTrail data events).
 - Environments via workspaces or `envs/` dirs. Remote state in an encrypted S3 backend + DynamoDB lock (GovCloud).
 - Static analysis in CI: `terraform validate`, `tflint`, `checkov`.
+- **Stage idempotency contract:** Step Functions will retry stages. Every stage must be safely re-runnable — artifact writes overwrite (never duplicate/corrupt), job-status updates converge. Make this an explicit requirement in the state-machine design, verified per stage.
+- **Public-repo discipline:** this repo is public. Account IDs, VPC/endpoint IDs, and any environment-specific values live only in `*.tfvars` (gitignored; `*.tfvars.example` committed with placeholders). A leak check is part of the #2 review gate.
+- **Known cost floor:** interface VPC endpoints bill hourly (~$7–8/mo each). With 6–7 endpoints the environment costs ~$50+/mo at zero usage — the dominant idle cost, exceeding Lambda. Accepted consequence of the fully-private requirement; document in the env README so the first bill isn't a surprise.
+- **Known friction — private SPA serving:** serving React assets through Private API GW (S3 proxy) is workable but fiddly (binary media types, no CDN caching, per-request cost/latency). Fallback options if it bites: serve the SPA from the API Lambda, or a small internal ALB. Decide during #2 implementation; #1's abstractions keep either swap cheap.
 
 ---
 
@@ -128,6 +140,7 @@ The current `web.py` couples request → parse → export synchronously. The exi
 - **Least privilege:** one IAM role per Lambda, scoped to exact ARNs, `aws-us-gov` partition.
 - **Data handling:** Bedrock prompts (finding text) stay in-VPC via PrivateLink; document data-flow for the ATO package. No third-party model providers.
 - **Audit:** CloudWatch logs/metrics; CloudTrail S3 data events; job records retained (with TTL) for traceability.
+- **CUI handling (explicit):** scan results and derived findings are treated as CUI. State this in the ATO data-flow documentation; apply CUI marking guidance to generated reports where org policy requires it; retention/deletion (S3 lifecycle, DynamoDB TTL) is set per records policy — TTL values are a policy decision, not a convenience default. Confirm marking requirements with the ISSO during #2.
 - Run a security review before shipping infra and the Bedrock stage.
 
 ---

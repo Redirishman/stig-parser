@@ -7,15 +7,14 @@ import logging
 import shutil
 import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-from app.exporters.excel_exporter import ExcelExporter
-from app.parsers.benchmark_parser import BenchmarkParser
-from app.parsers.xccdf_parser import XCCDFResultsParser
-from app.processors.filter import filter_findings
-from app.processors.matcher import match_results_to_benchmarks
-from app.utils.zip_extract import expand_benchmark_paths
+from app.core.pipeline import (
+    PipelineError,
+    default_output_name,
+    export_stage,
+    parse_stage,
+)
 
 
 def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> list[Path]:
@@ -114,66 +113,27 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Results files:   %d", len(results_paths))
     log.info("Benchmark files: %d", len(benchmark_paths))
 
-    # Expand any DISA STIG zip benchmarks into a managed temp dir
     extract_dir = Path(tempfile.mkdtemp(prefix="stig_zip_"))
     try:
-        benchmark_paths, zip_warnings = expand_benchmark_paths(benchmark_paths, extract_dir)
-        for w in zip_warnings:
+        try:
+            result = parse_stage(results_paths, benchmark_paths, extract_dir)
+        except PipelineError as exc:
+            log.error("%s", exc)
+            return 1
+
+        for w in result.warnings:
             log.warning(w)
-        if not benchmark_paths:
-            log.error("No benchmark XCCDF files available after zip expansion. Aborting.")
-            return 1
 
-        # Parse benchmarks
-        benchmark_parser = BenchmarkParser()
-        benchmarks = []
-        for path in benchmark_paths:
-            log.info("Parsing benchmark: %s", path.name)
-            bm = benchmark_parser.parse(path)
-            if bm:
-                benchmarks.append(bm)
-            else:
-                log.warning("Skipping unparseable benchmark: %s", path.name)
+        log.info("Actionable findings: %d", len(result.findings))
 
-        # Parse results
-        results_parser = XCCDFResultsParser()
-        scan_results = []
-        for i, path in enumerate(results_paths, start=1):
-            log.info("Parsing results file %d/%d: %s", i, len(results_paths), path.name)
-            sr = results_parser.parse(path)
-            if sr:
-                scan_results.append(sr)
-            else:
-                log.warning("Skipping unparseable results file: %s", path.name)
-
-        if not scan_results:
-            log.error("No valid results files could be parsed. Aborting.")
-            return 1
-
-        # Match and filter
-        log.info("Matching results to benchmarks…")
-        findings = match_results_to_benchmarks(scan_results, benchmarks)
-
-        log.info("Filtering to actionable findings…")
-        findings = filter_findings(findings)
-
-        if not findings:
-            log.error("No actionable findings after filtering. Nothing to export.")
-            return 1
-
-        log.info("Actionable findings: %d", len(findings))
-
-        # Output path
         if args.output:
             output_path = Path(args.output)
         else:
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            output_path = Path(f"stig_findings_{ts}.xlsx")
+            output_path = Path(default_output_name())
 
-        # Export
         log.info("Exporting to %s…", output_path)
         try:
-            ExcelExporter().export(findings, output_path)
+            export_stage(result.findings, output_path)
         except Exception as exc:
             log.error("Export failed: %s", exc)
             return 1
