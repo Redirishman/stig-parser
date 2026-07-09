@@ -138,7 +138,14 @@ header h1 {
 }
 
 @media (max-width: 580px) {
-  .upload-grid { grid-template-columns: 1fr; }
+  /* minmax(0,1fr) here too: a long nowrap filename must not force overflow */
+  .upload-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Coarse pointers (touch): meet the 44px target minimum */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  .file-list .file-remove { min-width: 44px; min-height: 44px; }
 }
 
 .upload-zone {
@@ -467,6 +474,12 @@ a:focus-visible {
   border-top: 1px solid var(--color-border);
 }
 
+/* When the zero-severity note follows, tighten the gap to it (no negative
+   margins): :has scopes this to exactly the case where the note is visible. */
+.result-card:has(#summary-note:not([hidden])) .report-summary {
+  margin-bottom: .75rem;
+}
+
 .summary-row {
   display: flex;
   justify-content: space-between;
@@ -507,7 +520,7 @@ a:focus-visible {
   border-radius: var(--radius);
   padding: .5rem .75rem;
   max-width: 26rem;
-  margin: -.75rem auto 1.75rem; /* tucks under the summary it annotates */
+  margin: 0 auto 1.75rem;
   text-align: left;
 }
 
