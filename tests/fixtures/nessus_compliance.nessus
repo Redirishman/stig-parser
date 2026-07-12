@@ -1,0 +1,114 @@
+<?xml version="1.0" ?>
+<!--
+  Sanitized Nessus DISA compliance scan (.nessus, NessusClientData_v2).
+  Structure mirrors real Nessus Policy Compliance output (Unix Compliance
+  Checks plugin 21157 with DISA STIG .audit file) — element names, cm:
+  namespace tags, and compliance-reference token format verified against a
+  real Tenable export. Hostnames, IPs, and values are synthetic.
+-->
+<NessusClientData_v2>
+<Policy><policyName>Policy Compliance Auditing</policyName>
+<Preferences><ServerPreferences><preference><name>plugin_set</name><value>21157</value></preference></ServerPreferences></Preferences>
+</Policy>
+<Report name="DISA Compliance Scan" xmlns:cm="http://www.nessus.org/cm">
+<ReportHost name="192.168.77.10">
+<HostProperties>
+<tag name="host-ip">192.168.77.10</tag>
+<tag name="host-fqdn">rhel7-lab-01.example.mil</tag>
+<tag name="HOST_START">Tue Mar 15 08:00:00 2026</tag>
+<tag name="HOST_END">Tue Mar 15 08:41:12 2026</tag>
+</HostProperties>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="3" pluginID="21157" pluginName="Unix Compliance Checks" pluginFamily="Policy Compliance">
+<agent>unix</agent>
+<compliance>true</compliance>
+<compliance_check_type>Unix</compliance_check_type>
+<fname>unix_compliance_check.nbin</fname>
+<plugin_type>local</plugin_type>
+<risk_factor>None</risk_factor>
+<cm:compliance-benchmark-version>3.4.0</cm:compliance-benchmark-version>
+<cm:compliance-check-name>RHEL-07-010010 - The Red Hat Enterprise Linux operating system must be configured so that the file permissions, ownership, and group membership of system files and commands match the vendor values.</cm:compliance-check-name>
+<cm:compliance-check-id>aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66</cm:compliance-check-id>
+<cm:compliance-actual-value>Permissions of /etc/shadow: 0644 (expected 0000)</cm:compliance-actual-value>
+<cm:compliance-source>custom</cm:compliance-source>
+<cm:compliance-audit-file>DISA_STIG_Red_Hat_Enterprise_Linux_7_v3r4.audit</cm:compliance-audit-file>
+<cm:compliance-info>Discretionary access control is weakened if a user or group has access permissions to system files and directories greater than the default.</cm:compliance-info>
+<cm:compliance-result>FAILED</cm:compliance-result>
+<cm:compliance-reference>800-171|3.3.8,800-53|AU-9,CAT|I,CCI|CCI-001494,DISA_Benchmark|RHEL_7_STIG,Rule-ID|SV-204392r646841_rule,STIG-ID|RHEL-07-010010,Vuln-ID|V-204392</cm:compliance-reference>
+<cm:compliance-solution>Run the following command to determine which package owns the file, then reset permissions: # rpm --setperms [package]</cm:compliance-solution>
+<cm:compliance-benchmark-name>DISA STIG Red Hat Enterprise Linux 7</cm:compliance-benchmark-name>
+<description>"RHEL-07-010010 ..." : [FAILED]</description>
+</ReportItem>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="2" pluginID="21157" pluginName="Unix Compliance Checks" pluginFamily="Policy Compliance">
+<agent>unix</agent>
+<compliance>true</compliance>
+<compliance_check_type>Unix</compliance_check_type>
+<fname>unix_compliance_check.nbin</fname>
+<plugin_type>local</plugin_type>
+<risk_factor>None</risk_factor>
+<cm:compliance-check-name>RHEL-07-010020 - The Red Hat Enterprise Linux operating system must use a separate file system for /var.</cm:compliance-check-name>
+<cm:compliance-check-id>bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66ee77</cm:compliance-check-id>
+<cm:compliance-actual-value>/var is on the root filesystem</cm:compliance-actual-value>
+<cm:compliance-audit-file>DISA_STIG_Red_Hat_Enterprise_Linux_7_v3r4.audit</cm:compliance-audit-file>
+<cm:compliance-info>The use of separate file systems for different paths can protect the system from failures.</cm:compliance-info>
+<cm:compliance-result>PASSED</cm:compliance-result>
+<cm:compliance-reference>800-53|CM-6,CAT|II,CCI|CCI-000366,DISA_Benchmark|RHEL_7_STIG,Rule-ID|SV-204393r646843_rule,STIG-ID|RHEL-07-010020,Vuln-ID|V-204393</cm:compliance-reference>
+<cm:compliance-solution>Migrate the /var path onto a separate file system.</cm:compliance-solution>
+<cm:compliance-benchmark-name>DISA STIG Red Hat Enterprise Linux 7</cm:compliance-benchmark-name>
+</ReportItem>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="1" pluginID="21157" pluginName="Unix Compliance Checks" pluginFamily="Policy Compliance">
+<agent>unix</agent>
+<compliance>true</compliance>
+<compliance_check_type>Unix</compliance_check_type>
+<fname>unix_compliance_check.nbin</fname>
+<plugin_type>local</plugin_type>
+<risk_factor>None</risk_factor>
+<cm:compliance-check-name>RHEL-07-010030 - The Red Hat Enterprise Linux operating system must display the Standard Mandatory DoD Notice and Consent Banner before granting local or remote access.</cm:compliance-check-name>
+<cm:compliance-check-id>cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66ee77ff88</cm:compliance-check-id>
+<cm:compliance-actual-value>Manual review required — banner file present but content differs from DoD text.</cm:compliance-actual-value>
+<cm:compliance-audit-file>DISA_STIG_Red_Hat_Enterprise_Linux_7_v3r4.audit</cm:compliance-audit-file>
+<cm:compliance-info>Display of a standardized and approved use notification is required before granting access.</cm:compliance-info>
+<cm:compliance-result>WARNING</cm:compliance-result>
+<cm:compliance-reference>800-53|AC-8a,CAT|III,CCI|CCI-000048,DISA_Benchmark|RHEL_7_STIG,Rule-ID|SV-204394r646845_rule,STIG-ID|RHEL-07-010030,Vuln-ID|V-204394</cm:compliance-reference>
+<cm:compliance-solution>Configure /etc/issue with the Standard Mandatory DoD Notice and Consent Banner text.</cm:compliance-solution>
+<cm:compliance-benchmark-name>DISA STIG Red Hat Enterprise Linux 7</cm:compliance-benchmark-name>
+</ReportItem>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="0" pluginID="21157" pluginName="Unix Compliance Checks" pluginFamily="Policy Compliance">
+<agent>unix</agent>
+<compliance>true</compliance>
+<compliance_check_type>Unix</compliance_check_type>
+<fname>unix_compliance_check.nbin</fname>
+<plugin_type>local</plugin_type>
+<risk_factor>None</risk_factor>
+<cm:compliance-check-name>RHEL-07-010040 - The Red Hat Enterprise Linux operating system must enable a user session lock until that user re-establishes access.</cm:compliance-check-name>
+<cm:compliance-check-id>dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66ee77ff88aa99</cm:compliance-check-id>
+<cm:compliance-actual-value>Error running check: command timed out</cm:compliance-actual-value>
+<cm:compliance-audit-file>DISA_STIG_Red_Hat_Enterprise_Linux_7_v3r4.audit</cm:compliance-audit-file>
+<cm:compliance-info>A session lock prevents access by anyone other than the authenticated user.</cm:compliance-info>
+<cm:compliance-result>ERROR</cm:compliance-result>
+<cm:compliance-reference>800-53|AC-11a,CAT|II,CCI|CCI-000056,DISA_Benchmark|RHEL_7_STIG,Rule-ID|SV-204395r646847_rule,STIG-ID|RHEL-07-010040,Vuln-ID|V-204395</cm:compliance-reference>
+<cm:compliance-solution>Configure the operating system to enable a user to initiate a session lock.</cm:compliance-solution>
+<cm:compliance-benchmark-name>DISA STIG Red Hat Enterprise Linux 7</cm:compliance-benchmark-name>
+</ReportItem>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="3" pluginID="21157" pluginName="Unix Compliance Checks" pluginFamily="Policy Compliance">
+<agent>unix</agent>
+<compliance>true</compliance>
+<compliance_check_type>Unix</compliance_check_type>
+<fname>unix_compliance_check.nbin</fname>
+<plugin_type>local</plugin_type>
+<risk_factor>None</risk_factor>
+<cm:compliance-check-name>Custom site check - no DISA reference tokens on this one.</cm:compliance-check-name>
+<cm:compliance-check-id>ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66ee77ff88aa99bb00</cm:compliance-check-id>
+<cm:compliance-actual-value>value mismatch</cm:compliance-actual-value>
+<cm:compliance-audit-file>site_custom.audit</cm:compliance-audit-file>
+<cm:compliance-info>Site-specific check without STIG cross-references.</cm:compliance-info>
+<cm:compliance-result>FAILED</cm:compliance-result>
+<cm:compliance-reference>800-53|CM-6</cm:compliance-reference>
+<cm:compliance-solution>Correct the configured value.</cm:compliance-solution>
+</ReportItem>
+<ReportItem port="22" svc_name="ssh" protocol="tcp" severity="0" pluginID="22964" pluginName="Service Detection" pluginFamily="Service detection">
+<description>An SSH server is running on this port.</description>
+<plugin_type>remote</plugin_type>
+</ReportItem>
+</ReportHost>
+</Report>
+</NessusClientData_v2>

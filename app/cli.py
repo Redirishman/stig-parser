@@ -92,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("app.cli")
 
-    # Resolve file paths (results: .xml or .cklb, benchmarks: .xml or .zip)
-    results_paths = _resolve_paths(args.results, extensions=(".xml", ".cklb"))
+    # Resolve file paths (results: .xml/.cklb/.nessus, benchmarks: .xml/.zip)
+    results_paths = _resolve_paths(args.results, extensions=(".xml", ".cklb", ".nessus"))
     benchmark_paths = (
         _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
         if args.benchmarks
