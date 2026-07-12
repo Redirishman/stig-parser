@@ -50,7 +50,10 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         required=True,
         metavar="PATH",
-        help="XCCDF results files or directory (supports globs).",
+        help=(
+            "XCCDF results files (.xml) and/or Evaluate-STIG / STIG Viewer 3 "
+            "checklists (.cklb), or a directory (supports globs)."
+        ),
     )
     p.add_argument(
         "--benchmarks",
@@ -89,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("app.cli")
 
-    # Resolve file paths (results: .xml only, benchmarks: .xml or .zip)
-    results_paths = _resolve_paths(args.results)
+    # Resolve file paths (results: .xml or .cklb, benchmarks: .xml or .zip)
+    results_paths = _resolve_paths(args.results, extensions=(".xml", ".cklb"))
     benchmark_paths = (
         _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
         if args.benchmarks
@@ -101,14 +104,14 @@ def main(argv: list[str] | None = None) -> int:
         log.error("No results files found for: %s", args.results)
         return 1
 
-    # When no benchmark files are supplied, SCC result files embed the full
-    # benchmark definitions — use the results files for both sides.
+    # When no benchmark files are supplied the pipeline reuses the XCCDF
+    # results as benchmark sources (SCC self-contained format); CKLB
+    # checklists never need benchmarks.
     if not benchmark_paths:
         log.info(
-            "No --benchmarks supplied — using results files as benchmarks "
-            "(SCC self-contained format)."
+            "No --benchmarks supplied — XCCDF results will be used as their "
+            "own benchmark source (SCC self-contained format)."
         )
-        benchmark_paths = list(results_paths)
 
     log.info("Results files:   %d", len(results_paths))
     log.info("Benchmark files: %d", len(benchmark_paths))

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated OpenSCAP remediation-run fixture: a Benchmark wrapper holding
+  TWO TestResult elements. The first is the initial scan (rule fails), the
+  second is the post-remediation re-scan (rule passes, one still open).
+  The parser must report the LAST TestResult (final machine state).
+-->
+<cdf:Benchmark
+    xmlns:cdf="http://checklists.nist.gov/xccdf/1.2"
+    id="xccdf_org.ssgproject.content_benchmark_RHEL-9">
+
+  <cdf:TestResult id="xccdf_org.open-scap_testresult_initial"
+                  start-time="2024-11-15T08:00:00" end-time="2024-11-15T08:10:00">
+    <cdf:benchmark href="ssg-rhel9-ds.xml" id="xccdf_org.ssgproject.content_benchmark_RHEL-9"/>
+    <cdf:title>Initial scan</cdf:title>
+    <cdf:target>rhel9-host-01</cdf:target>
+    <cdf:target-address>10.20.30.40</cdf:target-address>
+    <cdf:rule-result idref="xccdf_org.ssgproject.content_rule_package_telnet_removed" severity="high">
+      <cdf:result>fail</cdf:result>
+    </cdf:rule-result>
+    <cdf:rule-result idref="xccdf_org.ssgproject.content_rule_service_sshd_enabled" severity="medium">
+      <cdf:result>fail</cdf:result>
+    </cdf:rule-result>
+    <cdf:score system="urn:xccdf:scoring:default" maximum="100">50.0</cdf:score>
+  </cdf:TestResult>
+
+  <cdf:TestResult id="xccdf_org.open-scap_testresult_remediated"
+                  start-time="2024-11-15T08:15:00" end-time="2024-11-15T08:25:00">
+    <cdf:benchmark href="ssg-rhel9-ds.xml" id="xccdf_org.ssgproject.content_benchmark_RHEL-9"/>
+    <cdf:title>Post-remediation scan</cdf:title>
+    <cdf:target>rhel9-host-01</cdf:target>
+    <cdf:target-address>10.20.30.40</cdf:target-address>
+    <cdf:rule-result idref="xccdf_org.ssgproject.content_rule_package_telnet_removed" severity="high">
+      <cdf:result>pass</cdf:result>
+    </cdf:rule-result>
+    <cdf:rule-result idref="xccdf_org.ssgproject.content_rule_service_sshd_enabled" severity="medium">
+      <cdf:result>fail</cdf:result>
+    </cdf:rule-result>
+    <cdf:score system="urn:xccdf:scoring:default" maximum="100">75.0</cdf:score>
+  </cdf:TestResult>
+
+</cdf:Benchmark>

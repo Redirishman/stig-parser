@@ -141,7 +141,14 @@ def create_app(secret_key: str | None = None) -> Flask:
 
         for f in results_files:
             if f.filename:
-                safe_name = secure_filename(f.filename) or "upload.xml"
+                # Preserve the extension on the fallback name — the pipeline
+                # routes .cklb files to the CKLB parser by suffix.
+                fallback = (
+                    "upload.cklb"
+                    if f.filename.lower().endswith(".cklb")
+                    else "upload.xml"
+                )
+                safe_name = secure_filename(f.filename) or fallback
                 dest = results_dir / safe_name
                 f.save(str(dest))
                 saved_results.append(dest)
