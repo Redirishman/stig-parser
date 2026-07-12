@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated legacy STIG Viewer 2 .ckl checklist (truncated). Users sometimes
+  rename or upload these as .xml. The XCCDF parser must refuse it loudly and
+  point at the CKLB route, not silently produce 0 rule-results.
+-->
+<CHECKLIST>
+  <ASSET>
+    <ROLE>Member Server</ROLE>
+    <ASSET_TYPE>Computing</ASSET_TYPE>
+    <HOST_NAME>WIN-SERVER-01</HOST_NAME>
+    <HOST_IP>192.168.1.10</HOST_IP>
+  </ASSET>
+  <STIGS>
+    <iSTIG>
+      <STIG_INFO>
+        <SI_DATA>
+          <SID_NAME>title</SID_NAME>
+          <SID_DATA>Microsoft Windows Server 2022 STIG</SID_DATA>
+        </SI_DATA>
+      </STIG_INFO>
+      <VULN>
+        <STIG_DATA>
+          <VULN_ATTRIBUTE>Vuln_Num</VULN_ATTRIBUTE>
+          <ATTRIBUTE_DATA>V-254239</ATTRIBUTE_DATA>
+        </STIG_DATA>
+        <STATUS>Open</STATUS>
+      </VULN>
+    </iSTIG>
+  </STIGS>
+</CHECKLIST>

@@ -198,3 +198,36 @@ class TestCancelRoute:
 
         r = client.get(f"/api/status/{job_id}")
         assert r.get_json()["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# CKLB upload (Evaluate-STIG / STIG Viewer 3 checklists)
+# ---------------------------------------------------------------------------
+
+class TestCklbUpload:
+    def test_cklb_only_upload_completes_with_findings(self, client):
+        data = {"results": _make_upload(FIXTURES / "evaluate_stig_checklist.cklb")}
+        post = client.post("/api/process", data=data, content_type="multipart/form-data")
+        assert post.status_code == 200
+        job_id = post.get_json()["job_id"]
+
+        final = _wait_for_completion(client, job_id)
+        assert final["status"] == "complete"
+        summary = final["summary"]
+        assert summary["findings"] == 3
+        assert summary["cat1"] == 1
+        assert summary["cat2"] == 2  # includes the severity-override rule
+        assert summary["hosts"] == 1
+
+    def test_mixed_xml_and_cklb_upload_completes(self, client):
+        data = {
+            "results": [
+                _make_upload(FIXTURES / "scc_results.xml"),
+                _make_upload(FIXTURES / "evaluate_stig_checklist.cklb"),
+            ]
+        }
+        post = client.post("/api/process", data=data, content_type="multipart/form-data")
+        job_id = post.get_json()["job_id"]
+        final = _wait_for_completion(client, job_id)
+        assert final["status"] == "complete"
+        assert final["summary"]["files"] == 2

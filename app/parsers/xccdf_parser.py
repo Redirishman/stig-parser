@@ -46,7 +46,7 @@ _FACT_IP_URNS: list[str] = [
 ]
 
 
-def _find_test_result(root: etree._Element) -> etree._Element:
+def _find_test_result(root: etree._Element, file_name: str) -> etree._Element:
     """Return the <TestResult> element to operate on.
 
     XCCDF results files come in two shapes in the wild:
@@ -54,25 +54,30 @@ def _find_test_result(root: etree._Element) -> etree._Element:
       2. <Benchmark> is the root with <TestResult> nested inside (some
          scanners, including certain SCC Windows 11 outputs)
 
+    OpenSCAP remediation runs embed TWO TestResult elements (initial scan,
+    then post-remediation). The LAST one reflects the machine's final state,
+    so that is the one reported — with a warning, since the choice matters.
+
     Returns the <TestResult> if found anywhere in the tree, otherwise the
     original root (callers will then find no rule-results and surface a
     clear warning).
     """
     if etree.QName(root.tag).localname == "TestResult":
         return root
-    # Direct child first (cheap, common case)
-    for el in root:
-        if callable(el.tag):
-            continue
-        if etree.QName(el.tag).localname == "TestResult":
-            return el
-    # Fall back to a deeper search
-    for el in root.iter():
-        if callable(el.tag):
-            continue
-        if etree.QName(el.tag).localname == "TestResult":
-            return el
-    return root
+    matches = [
+        el for el in root.iter()
+        if not callable(el.tag) and etree.QName(el.tag).localname == "TestResult"
+    ]
+    if not matches:
+        return root
+    if len(matches) > 1:
+        log.warning(
+            "%s: %d <TestResult> elements found (remediation-style output) — "
+            "using the last one (post-remediation state)",
+            file_name,
+            len(matches),
+        )
+    return matches[-1]
 
 
 def _find_fact(root: etree._Element, urns: list[str]) -> str:
@@ -175,10 +180,23 @@ class XCCDFResultsParser(BaseParser):
             return None
 
         document_root = tree.getroot()
+
+        # A legacy .ckl checklist (STIG Viewer 2 XML) is not XCCDF results —
+        # parsing it here would silently yield 0 rule-results. Fail loud with
+        # a pointer to the supported route instead.
+        if etree.QName(document_root.tag).localname == "CHECKLIST":
+            log.warning(
+                "%s is a STIG Viewer .ckl checklist, not XCCDF results. "
+                "Export the checklist as CKLB (STIG Viewer 3) and upload the "
+                ".cklb file instead.",
+                path.name,
+            )
+            return None
+
         scanner = detect_scanner(path)
         # XCCDF target/result data lives inside <TestResult> — locate it whether
         # it is the root element or nested inside a <Benchmark>
-        root = _find_test_result(document_root)
+        root = _find_test_result(document_root, path.name)
 
         # Hostname: <target> → <target-facts> host_name/fqdn → <title> → filename stem
         hostname = (

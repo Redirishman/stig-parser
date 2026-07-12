@@ -37,9 +37,9 @@
                 </svg>
               </div>
               <h2>Scan Results</h2>
-              <p>XCCDF results files from SCC, OpenSCAP, Nessus, or Evaluate-STIG</p>
+              <p>XCCDF results from SCC, OpenSCAP, or Nessus (.xml) &mdash; or Evaluate-STIG / STIG Viewer checklists (.cklb)</p>
               <button type="button" class="btn btn-secondary" id="results-browse">Choose Files</button>
-              <input type="file" id="results-input" name="results" multiple accept=".xml" hidden>
+              <input type="file" id="results-input" name="results" multiple accept=".xml,.cklb" hidden>
               <p class="zone-notice" id="results-zone-notice" role="status" hidden></p>
               <ul class="file-list" id="results-file-list"></ul>
             </div>
@@ -132,7 +132,7 @@
     </main>
 
     <footer>
-      <p>Supports SCC &bull; OpenSCAP &bull; Nessus SCAP* &bull; Evaluate-STIG*</p>
+      <p>Supports SCC &bull; OpenSCAP &bull; Evaluate-STIG (CKLB) &bull; Nessus SCAP*</p>
       <p class="small">* Built from documentation &mdash; not yet validated against real output. See the <a href="/readme">README</a>.</p>
     </footer>
   </div><!-- /.container -->
@@ -270,7 +270,7 @@
       });
     }
 
-    setupZone(resultsZone, resultsInput, resultsFileList, resultsBrowse, resultsZoneNotice, ['.xml']);
+    setupZone(resultsZone, resultsInput, resultsFileList, resultsBrowse, resultsZoneNotice, ['.xml', '.cklb']);
     setupZone(benchmarksZone, benchmarksInput, benchmarksFileList, benchmarksBrowse, benchmarksZoneNotice, ['.xml', '.zip']);
 
     function updateProcessBtn() {
