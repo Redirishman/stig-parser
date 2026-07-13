@@ -1,0 +1,27 @@
+# Terraform — never commit state, real vars, or backend wiring (public repo).
+# See docs/superpowers/specs/2026-07-13-govcloud-terraform-iac-spec.md §5.
+
+# Local state (should be remote S3 anyway, but never commit it)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Provider/module cache and lockfile-adjacent noise
+.terraform/
+.terraform.lock.hcl
+
+# Plans can embed resolved values (account IDs, ARNs) — never commit
+*.plan
+*.tfplan
+
+# Real variable and backend files carry environment-specific values.
+# Only the *.example templates are committed.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+backend.tf
+!backend.tf.example
+
+# Crash logs
+crash.log
+crash.*.log
