@@ -1,19 +1,19 @@
 # STIG Compliance Parser
 
-A Python tool that ingests XCCDF compliance scan results from multiple scanning tools, cross-references them against STIG benchmark definition files, and produces a consolidated Excel workbook of actionable findings. Includes a Flask web UI for interactive use and a CLI for scripted or headless workflows.
+A Python tool that ingests compliance scan results from multiple scanning tools — XCCDF results, Evaluate-STIG / STIG Viewer CKLB checklists, and Nessus compliance scans — cross-references XCCDF results against STIG benchmark definition files, and produces a consolidated Excel workbook of actionable findings. Includes a Flask web UI for interactive use and a CLI for scripted or headless workflows.
 
 ---
 
 ## Supported Scanners
 
-| Scanner | Status | Notes |
-|---|---|---|
-| DISA SCC (SCAP Compliance Checker) | ✅ Tested | **Self-contained** — result files embed full benchmark definitions, so a separate benchmark upload is not required |
-| OpenSCAP | ✅ Tested | Separate benchmark XML (or DISA ZIP) required |
-| Nessus SCAP | ⚠️ Built from documentation — not yet validated with real output | Separate benchmark XML required |
-| Evaluate-STIG | ⚠️ Built from documentation — not yet validated with real output | Separate benchmark XML required |
+| Scanner | Format | Status | Notes |
+|---|---|---|---|
+| DISA SCC (SCAP Compliance Checker) | XCCDF `.xml` | ✅ Tested | **Self-contained** — result files embed full benchmark definitions, so a separate benchmark upload is not required |
+| OpenSCAP | XCCDF `.xml` | ✅ Tested | Separate benchmark XML (or DISA ZIP) required. Remediation-style outputs (two `<TestResult>` elements) report the post-remediation state |
+| Evaluate-STIG / STIG Viewer 3 | `.cklb` (JSON) | ✅ Validated against real checklists | **Self-contained** — severity, check, and fix text are inline; no benchmark upload needed. Honors severity overrides and multi-STIG checklists |
+| Nessus / ACAS compliance scans | `.nessus` | ✅ Validated against real Tenable exports | **Self-contained** — DISA `.audit` scans map Vuln-ID/Rule-ID/CAT from the compliance references; no benchmark upload needed |
 
-Scanner type is auto-detected from XML namespace declarations, the `test-system` attribute on `<TestResult>`, and generator metadata — no manual tagging required.
+For XCCDF files, scanner type is auto-detected from XML namespace declarations, the `test-system` attribute on `<TestResult>`, and generator metadata — no manual tagging required. Legacy `.ckl` checklists (STIG Viewer 2) are not supported — export as `.cklb` from STIG Viewer 3.
 
 ---
 
@@ -98,8 +98,8 @@ python -m app.cli --results ./results/ --benchmarks ./benchmarks/
 
 | Argument | Description |
 |---|---|
-| `--results` | Results file(s), directory, or glob pattern (**required**) |
-| `--benchmarks` | Benchmark file(s), directory, or glob pattern. **Optional for SCC** — SCC result files embed their own benchmark definitions. Required for OpenSCAP / Nessus / Evaluate-STIG. |
+| `--results` | Results file(s), directory, or glob pattern — `.xml`, `.cklb`, or `.nessus` (**required**) |
+| `--benchmarks` | Benchmark file(s), directory, or glob pattern. **Only needed for OpenSCAP** — SCC results embed their own benchmark definitions, and `.cklb` / `.nessus` files are self-contained. |
 | `--output` | Output Excel path (default: `stig_findings_<timestamp>.xlsx`) |
 | `--verbose` | Enable detailed logging |
 
@@ -107,12 +107,13 @@ python -m app.cli --results ./results/ --benchmarks ./benchmarks/
 
 ## How It Works
 
-1. **Auto-detect scanner** — inspects XML namespaces, the `test-system` attribute, and generator metadata
-2. **Parse results** — extracts hostname, IP, benchmark reference, and all rule results from each XCCDF file
-3. **Parse benchmarks** — extracts STIG title, Vuln IDs, Rule IDs, severity, check text, and fix text. For SCC scans the benchmark definitions live inside the same result files, so no separate benchmark upload is required
-4. **Match** — links each result file to its benchmark via the embedded `<benchmark>` reference; falls back to ID string matching
-5. **Filter** — retains only Open, Not Reviewed, Error, and Unknown findings; discards Pass, Not Applicable, etc.
-6. **Export** — generates a formatted Excel workbook with COUNTIFS formulas in the Summary sheet
+1. **Route by format** — `.cklb` and `.nessus` files are self-contained and parse directly to findings; `.xml` files take the XCCDF path below
+2. **Auto-detect scanner** (XCCDF) — inspects XML namespaces, the `test-system` attribute, and generator metadata
+3. **Parse results** — extracts hostname, IP, benchmark reference, and all rule results from each XCCDF file
+4. **Parse benchmarks** — extracts STIG title, Vuln IDs, Rule IDs, severity, check text, and fix text. For SCC scans the benchmark definitions live inside the same result files, so no separate benchmark upload is required
+5. **Match** — links each XCCDF result file to its benchmark via the embedded `<benchmark>` reference; falls back to ID string matching
+6. **Filter** — retains only Open, Not Reviewed, Error, and Unknown findings; discards Pass, Not Applicable, etc.
+7. **Export** — generates a formatted Excel workbook with COUNTIFS formulas in the Summary sheet
 
 ---
 
@@ -150,7 +151,6 @@ The following features are planned for future releases:
 
 - **Standalone OVAL Results Parsing** — implement `oval_parser.py` to handle `.oval.xml` output from OpenSCAP, including OVAL-to-STIG rule ID mapping
 - **STIG ID Prefix Fallback Matching** — improved benchmark matching via Rule ID STIG identifier extraction when the benchmark reference is missing
-- **Nessus SCAP / Evaluate-STIG Validation** — validate and harden parsers against real output from these scanners
 - **Local STIG Library** — maintain a local cache of STIG benchmarks so users don't need to manually import benchmark files
 - **CKL Export** — generate STIG Viewer `.ckl` checklist files from parsed results
 - **Delta Reporting** — compare two scan runs to show remediation progress

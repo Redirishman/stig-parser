@@ -109,3 +109,34 @@ class TestPipelineWithCklb:
         assert summary["cat2"] == 2   # V-254241 medium + V-254242 override→medium
         assert summary["cat3"] == 0
         assert summary["hosts"] == 1
+
+
+class TestPipelineWithNessus:
+    def test_nessus_only_run_produces_findings(self, tmp_path):
+        result = parse_stage(
+            [FIXTURES / "nessus_compliance.nessus"],
+            [],
+            tmp_path / "extract",
+        )
+        assert result.source_file_count == 1
+        # FAILED + WARNING + ERROR + FAILED-custom actionable; PASSED filtered
+        assert len(result.findings) == 4
+        by_id = {f.vuln_id: f for f in result.findings if f.vuln_id}
+        assert by_id["V-204392"].severity == "CAT I"
+        assert by_id["V-204392"].check_text  # self-contained, no benchmark
+        assert not any("benchmark" in w.lower() for w in result.warnings)
+
+    def test_all_three_formats_in_one_run(self, tmp_path):
+        result = parse_stage(
+            [
+                FIXTURES / "scc_results.xml",
+                FIXTURES / "evaluate_stig_checklist.cklb",
+                FIXTURES / "nessus_compliance.nessus",
+            ],
+            [],
+            tmp_path / "extract",
+        )
+        assert result.source_file_count == 3
+        servers = {f.server for f in result.findings}
+        assert "WIN-SERVER-01" in servers            # CKLB host
+        assert "rhel7-lab-01.example.mil" in servers  # .nessus host

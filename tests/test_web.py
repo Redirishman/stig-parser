@@ -231,3 +231,17 @@ class TestCklbUpload:
         final = _wait_for_completion(client, job_id)
         assert final["status"] == "complete"
         assert final["summary"]["files"] == 2
+
+
+class TestNessusUpload:
+    def test_nessus_upload_completes_with_findings(self, client):
+        data = {"results": _make_upload(FIXTURES / "nessus_compliance.nessus")}
+        post = client.post("/api/process", data=data, content_type="multipart/form-data")
+        assert post.status_code == 200
+        job_id = post.get_json()["job_id"]
+        final = _wait_for_completion(client, job_id)
+        assert final["status"] == "complete"
+        summary = final["summary"]
+        assert summary["findings"] == 4
+        assert summary["cat1"] == 1
+        assert summary["hosts"] == 1

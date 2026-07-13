@@ -14,6 +14,7 @@ from app.exporters.excel_exporter import ExcelExporter
 from app.parsers.base import Finding
 from app.parsers.benchmark_parser import BenchmarkParser
 from app.parsers.cklb_parser import CKLBParser
+from app.parsers.nessus_parser import NessusComplianceParser
 from app.parsers.xccdf_parser import XCCDFResultsParser
 from app.processors.filter import filter_findings
 from app.processors.matcher import match_results_to_benchmarks
@@ -56,11 +57,13 @@ def parse_stage(
 
     warnings: list[str] = []
 
-    # CKLB checklists (Evaluate-STIG / STIG Viewer 3) are JSON and
-    # self-contained — they take a separate parse path with no benchmark
-    # matching. Everything else goes through the XCCDF pipeline.
-    cklb_paths = [p for p in results_paths if p.suffix.lower() == ".cklb"]
-    xccdf_paths = [p for p in results_paths if p.suffix.lower() != ".cklb"]
+    # Self-contained formats take a separate parse path with no benchmark
+    # matching: CKLB checklists (Evaluate-STIG / STIG Viewer 3, JSON) and
+    # .nessus compliance scans (Tenable XML). Everything else goes through
+    # the XCCDF pipeline.
+    _SELF_CONTAINED = {".cklb": CKLBParser, ".nessus": NessusComplianceParser}
+    sc_paths = [p for p in results_paths if p.suffix.lower() in _SELF_CONTAINED]
+    xccdf_paths = [p for p in results_paths if p.suffix.lower() not in _SELF_CONTAINED]
 
     # When no benchmark files were supplied, SCC result files embed the full
     # benchmark definitions — use the XCCDF results files for both sides.
@@ -93,41 +96,40 @@ def parse_stage(
         else:
             warnings.append(f"Could not parse results file: {path.name}")
 
-    cklb_parser = CKLBParser()
-    cklb_findings: list[Finding] = []
-    cklb_file_count = 0
-    for path in cklb_paths:
+    sc_findings: list[Finding] = []
+    sc_file_count = 0
+    for path in sc_paths:
         _check()
-        parsed = cklb_parser.parse(path)
+        parsed = _SELF_CONTAINED[path.suffix.lower()]().parse(path)
         if parsed is None:
-            warnings.append(f"Could not parse checklist: {path.name}")
+            warnings.append(f"Could not parse results file: {path.name}")
         else:
-            cklb_file_count += 1
-            cklb_findings.extend(parsed)
+            sc_file_count += 1
+            sc_findings.extend(parsed)
 
-    if not scan_results and cklb_file_count == 0:
+    if not scan_results and sc_file_count == 0:
         raise PipelineError("No valid results files could be parsed.")
 
     _check()
     findings = match_results_to_benchmarks(scan_results, benchmarks)
-    findings.extend(cklb_findings)
+    findings.extend(sc_findings)
     findings = filter_findings(findings)
 
     if not findings:
         total_rules = sum(len(s.rule_results) for s in scan_results)
-        total_rules += len(cklb_findings)
+        total_rules += len(sc_findings)
         if total_rules == 0:
             msg = (
                 f"No rule results were found in any of the "
-                f"{len(scan_results) + cklb_file_count} results file(s). The "
-                f"files may not be XCCDF scan results or CKLB checklists, or "
-                f"may use an unrecognised structure. Check the warnings for "
-                f"details."
+                f"{len(scan_results) + sc_file_count} results file(s). The "
+                f"files may not be scan results (XCCDF, CKLB, or .nessus), "
+                f"or may use an unrecognised structure. Check the warnings "
+                f"for details."
             )
         else:
             msg = (
                 f"Parsed {total_rules} rule result(s) across "
-                f"{len(scan_results) + cklb_file_count} file(s), but none had "
+                f"{len(scan_results) + sc_file_count} file(s), but none had "
                 f"an actionable status (Open / Not Reviewed / Error / "
                 f"Unknown). Either every rule passed, or the results were "
                 f"not matched to the supplied STIG benchmarks. Check the "
@@ -138,7 +140,7 @@ def parse_stage(
     return ParseResult(
         findings=findings,
         warnings=warnings,
-        source_file_count=len(scan_results) + cklb_file_count,
+        source_file_count=len(scan_results) + sc_file_count,
     )
 
 
