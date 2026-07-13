@@ -7,9 +7,11 @@ This directory is **infrastructure only** — the Python application lives in
 **Design:** [Sub-project #2 spec](../docs/superpowers/specs/2026-07-13-govcloud-terraform-iac-spec.md)
 · [Master architecture](../docs/superpowers/specs/2026-07-07-govcloud-replatform-design.md)
 
-> **Status:** scaffolding in progress. `versions.tf`, `.gitignore`, and this
-> README are in place; the `modules/` and `envs/` trees are being built per the
-> spec's §10 build order. This is not yet `apply`-able.
+> **Status:** scaffolding in progress. Foundation (`versions.tf`, `.gitignore`,
+> this README) + the low-dependency modules **`network`, `storage`, `data`** are
+> authored. Remaining per spec §10: `iam`, `compute`, `orchestration`, `api`,
+> `observability`, and the `envs/example` composition. Not yet `apply`-able, and
+> not yet run through `terraform validate` / `tflint` / `checkov` (operator CI).
 
 ---
 
