@@ -245,3 +245,60 @@ class TestNessusUpload:
         assert summary["findings"] == 4
         assert summary["cat1"] == 1
         assert summary["hosts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Upload allow-list + size cap (RESIDUALS #2)
+# ---------------------------------------------------------------------------
+
+class TestUploadValidation:
+    def test_disallowed_extension_rejected(self, client):
+        data = {"results": (io.BytesIO(b"malware"), "evil.exe")}
+        r = client.post("/api/process", data=data, content_type="multipart/form-data")
+        assert r.status_code == 400
+        assert "Unsupported file type" in r.get_json()["error"]
+
+    def test_disallowed_benchmark_extension_rejected(self, client):
+        data = {
+            "results": _make_upload(FIXTURES / "scc_results.xml"),
+            "benchmarks": (io.BytesIO(b"nope"), "notes.txt"),
+        }
+        r = client.post("/api/process", data=data, content_type="multipart/form-data")
+        assert r.status_code == 400
+        assert "Unsupported file type" in r.get_json()["error"]
+
+    def test_oversized_file_rejected(self, client, monkeypatch):
+        import app.web as web
+        monkeypatch.setattr(web, "_MAX_UPLOAD_BYTES", 16)
+        data = {"results": (io.BytesIO(b"x" * 64), "big.xml")}
+        r = client.post("/api/process", data=data, content_type="multipart/form-data")
+        assert r.status_code == 400
+        assert "too large" in r.get_json()["error"]
+
+    def test_rejection_leaves_no_job_dir(self, client, tmp_path):
+        data = {"results": (io.BytesIO(b"x"), "evil.exe")}
+        client.post("/api/process", data=data, content_type="multipart/form-data")
+        jobs_root = tmp_path / "jobs"
+        # Validation runs before any mkdir — no orphan job directory created.
+        assert not jobs_root.exists() or not any(jobs_root.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# Security response headers (RESIDUALS #3)
+# ---------------------------------------------------------------------------
+
+class TestSecurityHeaders:
+    def test_headers_present_on_index(self, client):
+        r = client.get("/")
+        assert r.headers["X-Frame-Options"] == "DENY"
+        assert r.headers["X-Content-Type-Options"] == "nosniff"
+        assert r.headers["Referrer-Policy"] == "no-referrer"
+        csp = r.headers["Content-Security-Policy"]
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "'unsafe-inline'" not in csp
+
+    def test_no_inline_script_in_template(self, client):
+        # Strict CSP forbids inline JS — the page must load app.js externally.
+        r = client.get("/")
+        assert b"/static/app.js" in r.data
