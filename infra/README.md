@@ -118,13 +118,22 @@ The layer must be built against the same `python_runtime` the functions declare.
 
 ## Verification status
 
+All gates below were run locally through Docker (none of the tooling is installed
+on the dev box). Git Bash mangles container paths, so mounts need
+`MSYS_NO_PATHCONV=1`:
+
+```sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "/g/path/to/stig-parser/infra:/w" -w /w \
+  hashicorp/terraform:1.9.8 fmt -check -recursive
+```
+
 | Gate | Status |
 |------|--------|
 | `terraform fmt -check -recursive` | clean |
 | `terraform validate` (8 modules + `envs/example`) | all pass |
+| `tflint` (aws ruleset, recursive) | clean — zero findings |
 | `checkov` | 448 passed, **0 failed**, 54 skipped |
 | Leak scan | clean (verified it catches a planted value) |
-| `tflint` | **not run locally** — runs in CI (`.github/workflows/infra.yml`) |
 | `terraform plan` / `apply` | **never run** — needs GovCloud credentials |
 
 Every `checkov` skip is inline at its resource with a written reason. The

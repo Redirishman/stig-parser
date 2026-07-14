@@ -15,15 +15,7 @@
 #     lands on the same state a first-time run would have reached.
 # This is what makes the Retry blocks below safe to have at all.
 
-data "aws_partition" "current" {}
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
 locals {
-  partition  = data.aws_partition.current.partition
-  account_id = data.aws_caller_identity.current.account_id
-  region     = data.aws_region.current.name
-
   # Transient-only. A malformed scan file fails deterministically, and retrying
   # it three times just burns three times the money to reach the same failure —
   # so States.TaskFailed (which a StageFailed raise surfaces as) is deliberately

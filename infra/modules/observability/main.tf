@@ -4,11 +4,9 @@
 # one question worth paging on: did an operator's job fail? Everything else is
 # console-inspectable after the fact.
 
-data "aws_partition" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  partition  = data.aws_partition.current.partition
   account_id = data.aws_caller_identity.current.account_id
   trail_name = "${var.name_prefix}-trail"
 }
