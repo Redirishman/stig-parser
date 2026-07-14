@@ -27,7 +27,11 @@ export interface JobState {
   ai: AiGate | null;
   aiError: string | null;
   error: string | null;
+  /** A cancel the server refused. Persistent — the job is still running. */
+  cancelError: string | null;
   stalled: boolean;
+  /** The polls stopped answering but the job id is still good: offer a reconnect. */
+  lostContact: boolean;
   /** filename -> percent complete, while uploading. */
   uploadProgress: Record<string, number>;
 }
@@ -41,7 +45,9 @@ const INITIAL: JobState = {
   ai: null,
   aiError: null,
   error: null,
+  cancelError: null,
   stalled: false,
+  lostContact: false,
   uploadProgress: {},
 };
 
@@ -102,7 +108,9 @@ export function useJob() {
         ai: job.ai ?? s.ai,
         aiError: job.ai_error ?? s.aiError,
         error: job.error ?? s.error,
+        cancelError: null,
         stalled: false,
+        lostContact: false,
       }));
     },
     [stopPolling],
@@ -154,11 +162,18 @@ export function useJob() {
         failures.current += 1;
         if (failures.current >= DEAD_POLLS) {
           stopPolling();
-          localStorage.removeItem(STORAGE_KEY);
+          // The id STAYS. Ten 1s polls is well inside a VPN re-key, and the copy
+          // says the job may still be running — dropping the id would destroy the
+          // only handle to reconnect to that job or fetch its report, orphaning a
+          // finished report over a ten-second blip. Message and behaviour agree:
+          // we kept the handle, and we offer it back.
           setState((s) => ({
             ...s,
             status: 'error',
-            error: 'Lost contact with the server. The job may still be running.',
+            lostContact: true,
+            error:
+              'Lost contact with the server. The job may still be running — its id ' +
+              'has been kept. Press Reconnect, or reload this page, to pick it back up.',
           }));
         }
       } finally {
@@ -190,7 +205,13 @@ export function useJob() {
       submitAbort.current = controller;
       const { signal } = controller;
 
-      setState({ ...INITIAL, status: 'uploading' });
+      // Seed every file at 0% rather than letting rows appear one at a time: the
+      // operator needs to see the whole queue, not just the file being pushed.
+      setState({
+        ...INITIAL,
+        status: 'uploading',
+        uploadProgress: Object.fromEntries(files.map((f) => [f.name, 0])),
+      });
       try {
         const { jobId, uploads } = await api.createUploads(files.map((f) => f.name));
         if (signal.aborted) return;
@@ -243,12 +264,42 @@ export function useJob() {
     [log, startPolling],
   );
 
+  /**
+   * Pick a job back up after the polls went quiet. The id was deliberately kept
+   * on the dead-backend path precisely so this is possible.
+   */
+  const reconnect = useCallback(async () => {
+    const jobId = state.jobId;
+    if (!jobId) return;
+    log('Reconnecting…');
+    try {
+      const job = await api.getJob(jobId);
+      if (TERMINAL_STATUSES.includes(job.status)) {
+        settle(job);
+        return;
+      }
+      setState((s) => ({ ...s, status: job.status, error: null, lostContact: false }));
+      startPolling(jobId);
+    } catch {
+      setState((s) => ({
+        ...s,
+        status: 'error',
+        lostContact: true,
+        error:
+          'Still cannot reach the server. The job may still be running — its id has ' +
+          'been kept. Check your VPN connection and try Reconnect again.',
+      }));
+    }
+  }, [state.jobId, log, settle, startPolling]);
+
   const cancel = useCallback(async () => {
     const jobId = state.jobId;
     if (!jobId) return;
     // First, before any await: stop the upload loop dead and abort the in-flight
     // XHR. Everything below races with a submit() that may still be uploading.
     submitAbort.current?.abort();
+    // Clear any previous failure notice — this attempt has not failed yet.
+    setState((s) => (s.cancelError === null ? s : { ...s, cancelError: null }));
     log('Cancelling…');
     try {
       const { status } = await api.cancelJob(jobId);
@@ -273,7 +324,18 @@ export function useJob() {
         settle({ ...(record ?? {}), status });
       }
     } catch (err) {
-      log(err instanceof Error ? err.message : 'Cancel failed.');
+      // Polling continues and the screen still says "Processing" — correctly, the
+      // job was NOT stopped. A line in a scrolling role="log" region is not enough
+      // to tell the operator that: this needs to persist, next to the control they
+      // pressed, until they act on it.
+      const detail = err instanceof Error ? err.message : 'The server did not respond.';
+      log(detail);
+      setState((s) => ({
+        ...s,
+        cancelError:
+          `The job could not be cancelled — ${detail} It is still running. ` +
+          'Press Cancel again to retry.',
+      }));
     }
   }, [state.jobId, log, settle, stopPolling]);
 
@@ -320,6 +382,8 @@ export function useJob() {
   // is therefore disabled until the id exists. A disabled control that becomes
   // enabled is honest; a live control that does nothing is not.
   const canCancel = state.jobId !== null;
+  /** A job whose polls died but whose id we still hold can be picked back up. */
+  const canReconnect = state.lostContact && state.jobId !== null;
 
-  return { state, submit, cancel, reset, canCancel };
+  return { state, submit, cancel, reconnect, reset, canCancel, canReconnect };
 }

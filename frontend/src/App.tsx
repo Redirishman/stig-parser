@@ -3,6 +3,7 @@ import * as api from './api';
 import ActivityLog from './components/ActivityLog';
 import AiToggle from './components/AiToggle';
 import ResultCard from './components/ResultCard';
+import UploadProgress from './components/UploadProgress';
 import UploadZone from './components/UploadZone';
 import WarningsBox from './components/WarningsBox';
 import { ApiError, type Config } from './types';
@@ -16,7 +17,7 @@ export default function App() {
   const [ai, setAi] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const { state, submit, cancel, reset, canCancel } = useJob();
+  const { state, submit, cancel, reconnect, reset, canCancel, canReconnect } = useJob();
 
   // The gate and the upload limits are server-side state. Without them the form
   // cannot validate a file or honestly describe the AI control, so it is not
@@ -158,11 +159,18 @@ export default function App() {
         {busy ? (
           <section>
             <h2>Processing</h2>
+            <UploadProgress progress={state.status === 'uploading' ? state.uploadProgress : {}} />
             <ActivityLog lines={state.log} />
             {state.stalled ? (
               <p className="progress-text stall-note" aria-live="polite">
                 Still working — large files can take a few minutes.
               </p>
+            ) : null}
+            {/* A cancel the server refused. role=alert and persistent: the job is
+                still running, the screen still says Processing, and a line in the
+                scrolling activity log would not tell the operator that. */}
+            {state.cancelError ? (
+              <p className="cancel-error" role="alert">{state.cancelError}</p>
             ) : null}
             <div className="progress-actions">
               {/* Disabled until the job id lands: the upload round-trip renders
@@ -192,6 +200,7 @@ export default function App() {
               ai={state.ai}
               aiError={state.aiError}
               downloadError={downloadError}
+              onReconnect={canReconnect ? () => void reconnect() : undefined}
               onDownload={() => void onDownload()}
               onReset={onReset}
             />

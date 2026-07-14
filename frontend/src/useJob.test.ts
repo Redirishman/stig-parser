@@ -106,6 +106,89 @@ describe('useJob', () => {
     expect(result.current.state.error).toMatch(/lost contact/i);
   });
 
+  it('keeps the job id when the backend goes dead, so the job can be reconnected', async () => {
+    // Ten 1s polls is well inside a VPN re-key. The copy says "the job may still
+    // be running" — deleting the id destroyed the only handle to reconnect to it
+    // or fetch its report, permanently orphaning a job that was probably fine.
+    vi.spyOn(api, 'getJob').mockRejectedValue(new Error('network'));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+
+    expect(result.current.state.status).toBe('error');
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('j1');
+    expect(result.current.state.jobId).toBe('j1');
+    expect(result.current.canReconnect).toBe(true);
+  });
+
+  it('reconnect picks the job back up after the blip clears', async () => {
+    const getJob = vi.spyOn(api, 'getJob').mockRejectedValue(new Error('network'));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(result.current.state.status).toBe('error');
+
+    getJob.mockResolvedValue(job({ status: 'running', progress: 'Parsing…' }));
+    await act(async () => { await result.current.reconnect(); });
+
+    expect(result.current.state.status).toBe('running');
+    expect(result.current.state.error).toBeNull();
+    expect(result.current.canReconnect).toBe(false);
+  });
+
+  it('reconnect onto an already-finished job lands the report', async () => {
+    const getJob = vi.spyOn(api, 'getJob').mockRejectedValue(new Error('network'));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+
+    getJob.mockResolvedValue(
+      job({ status: 'complete', summary: { files: 1, hosts: 1, findings: 2, cat1: 0, cat2: 1, cat3: 1 } }),
+    );
+    await act(async () => { await result.current.reconnect(); });
+
+    expect(result.current.state.status).toBe('complete');
+    expect(result.current.state.summary).not.toBeNull();
+  });
+
+  it('a failed cancel is surfaced, not buried in the log', async () => {
+    // Polling correctly continues and the UI still says Processing — so unless the
+    // failure is stated plainly the operator cannot tell whether the cancel took.
+    vi.spyOn(api, 'getJob').mockResolvedValue(job());
+    vi.spyOn(api, 'cancelJob').mockRejectedValue(new Error('Cancel rejected (503).'));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await result.current.cancel(); });
+
+    expect(result.current.state.cancelError).toMatch(/could not be cancelled/i);
+    expect(result.current.state.cancelError).toMatch(/still running/i);
+    // The job is untouched: still processing, still cancellable.
+    expect(result.current.state.status).not.toBe('idle');
+    expect(result.current.canCancel).toBe(true);
+  });
+
+  it('a retried cancel clears the previous failure notice', async () => {
+    vi.spyOn(api, 'getJob').mockResolvedValue(job());
+    const cancelJob = vi
+      .spyOn(api, 'cancelJob')
+      .mockRejectedValueOnce(new Error('Cancel rejected (503).'));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await result.current.cancel(); });
+    expect(result.current.state.cancelError).not.toBeNull();
+
+    cancelJob.mockResolvedValue({ jobId: 'j1', status: 'cancelled' });
+    await act(async () => { await result.current.cancel(); });
+
+    expect(result.current.state.cancelError).toBeNull();
+    expect(result.current.state.status).toBe('idle');
+  });
+
   it('a single failed poll does not kill the job', async () => {
     vi.spyOn(api, 'getJob')
       .mockRejectedValueOnce(new Error('blip'))

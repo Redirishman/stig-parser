@@ -1,8 +1,12 @@
-import type { AiGate, JobStatus, Summary } from '../types';
+import { explainAiGate } from '../aiGate';
+import type { AiGate, Summary } from '../types';
+// The one source of truth for what the UI can be showing. A local
+// `JobStatus | 'idle' | 'uploading'` copy of it would drift.
+import type { UiStatus } from '../useJob';
 import WarningsBox from './WarningsBox';
 
 interface Props {
-  status: JobStatus | 'idle' | 'uploading';
+  status: UiStatus;
   summary: Summary | null;
   warnings: string[];
   error: string | null;
@@ -10,12 +14,15 @@ interface Props {
   aiError: string | null;
   /** Why the last Download click did not produce a file. */
   downloadError?: string | null;
+  /** Present only when the job id survived a lost connection: offer it back. */
+  onReconnect?: () => void;
   onDownload: () => void;
   onReset: () => void;
 }
 
 export default function ResultCard({
-  status, summary, warnings, error, ai, aiError, downloadError, onDownload, onReset,
+  status, summary, warnings, error, ai, aiError, downloadError, onReconnect,
+  onDownload, onReset,
 }: Props) {
   if (status === 'error') {
     return (
@@ -27,8 +34,20 @@ export default function ResultCard({
           </svg>
         </div>
         <h2>Processing Failed</h2>
-        <p>{error}</p>
+        {/* A null error used to render an empty paragraph: "Processing Failed",
+            no reason, nothing to act on. */}
+        <p>
+          {error ??
+            'The server did not report a reason. Check the activity log, then try again.'}
+        </p>
         <WarningsBox warnings={warnings} title="Warnings recorded before the failure" />
+        {/* Contact was lost but the job id was kept — the operator can go back to
+            the job rather than re-uploading and re-running it. */}
+        {onReconnect ? (
+          <button type="button" className="btn btn-primary" onClick={onReconnect}>
+            Reconnect
+          </button>
+        ) : null}
         <button type="button" className="btn btn-secondary" onClick={onReset}>
           Try Again
         </button>
@@ -64,8 +83,14 @@ export default function ResultCard({
   // never written — the exact lie this card must never tell.
   if (status !== 'complete') return null;
 
-  // Findings exist but every severity is zero: the results were never matched to
-  // a benchmark. Say so — a silent row of zeroes reads like a clean system.
+  // Nothing came out of the scan at all — the most alarming outcome the parser can
+  // report, and the one that looks exactly like a perfectly compliant estate. A
+  // clean system and a failed parse must not be pixel-identical.
+  const zeroFindings = summary !== null && summary.findings === 0;
+
+  // Findings exist but every severity is zero: a different cause (the results were
+  // never matched to a benchmark), so it gets its own words. A silent row of
+  // zeroes reads like a clean system.
   const zeroCats =
     summary !== null &&
     summary.findings > 0 &&
@@ -95,6 +120,16 @@ export default function ResultCard({
         </dl>
       ) : null}
 
+      {zeroFindings ? (
+        <p className="summary-note">
+          No findings were extracted from these scan results. This is not
+          necessarily a compliant system — an unrecognised, empty, or wrong-format
+          scan file produces the same zeroes. Confirm the result-file and host
+          counts above match what you uploaded, and check any warnings below,
+          before treating this as a clean result.
+        </p>
+      ) : null}
+
       {zeroCats ? (
         <p className="summary-note">
           Severity counts are zero because the results were not matched to a STIG
@@ -102,10 +137,14 @@ export default function ResultCard({
         </p>
       ) : null}
 
-      {/* The AI gate, stated plainly. Never silently absent. */}
-      {ai && ai !== 'done' ? (
-        <p className="summary-note">{aiError ?? `AI enrichment: ${ai}.`}</p>
-      ) : null}
+      {/* The AI gate, in prose, on every report — including when the server said
+          nothing about it. An absent gate was rendering as nothing at all: the
+          exact silence spec §4.1 forbids. The raw enum never appears here; this
+          card is the artifact that feeds accreditation paperwork. */}
+      <p className="ai-status-note">
+        {explainAiGate(ai)}
+        {aiError && ai !== 'done' ? ` ${aiError}` : ''}
+      </p>
 
       {/* role=alert, not a console line: a download that produced no file has to
           say so where the operator is looking. */}

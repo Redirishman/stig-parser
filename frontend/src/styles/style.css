@@ -393,6 +393,73 @@ a:focus-visible {
   text-align: right; /* secondary action, kept out of the eye's main path */
 }
 
+/* A cancel the server refused. Persistent and loud: the job is still running,
+   and the screen still says "Processing" — nothing else on it would tell the
+   operator their Cancel did not take. */
+.cancel-error {
+  margin-top: .75rem;
+  font-size: var(--text-small);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: .5rem .75rem;
+  text-align: left;
+}
+
+/* ── Upload progress ─────────────────────────────────────────────────── */
+
+.upload-progress {
+  margin-bottom: .75rem;
+  text-align: left;
+}
+
+.upload-progress h3 {
+  font-size: var(--text-small);
+  font-weight: 700;
+  margin-bottom: .5rem;
+}
+
+.upload-progress ul {
+  list-style: none;
+}
+
+.upload-progress li {
+  display: grid;
+  grid-template-columns: minmax(6rem, 14rem) 1fr auto;
+  align-items: center;
+  gap: .75rem;
+  padding: .2rem 0;
+  font-size: var(--text-small);
+}
+
+.upload-progress-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-progress-track {
+  height: .5rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.upload-progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  /* Width only — a transform would not be honest about a stalled transfer. */
+  transition: width .2s linear;
+}
+
+.upload-progress-percent {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+  min-width: 3ch;
+  text-align: right;
+}
+
 /* ── Warnings ────────────────────────────────────────────────────────── */
 
 .warnings-box {
@@ -530,6 +597,17 @@ dd.summary-cat1-open {
   padding: .5rem .75rem;
   max-width: 26rem;
   margin: 0 auto 1rem;
+  text-align: left;
+}
+
+/* The AI gate line. Deliberately NOT the warning treatment of .summary-note: it
+   appears on every report, including the ones where enrichment ran exactly as
+   asked. A permanent amber box would train the operator to ignore amber boxes. */
+.ai-status-note {
+  font-size: var(--text-small);
+  color: var(--color-muted);
+  max-width: 26rem;
+  margin: 0 auto 1.75rem;
   text-align: left;
 }
 

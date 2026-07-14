@@ -17,4 +17,14 @@ describe('AiToggle', () => {
     expect(screen.getByRole('checkbox', { name: /ai enrichment/i })).toBeDisabled();
     expect(screen.getByText(/no model is approved for this deployment/i)).toBeInTheDocument();
   });
+
+  it('says something useful even when the server names no reason', async () => {
+    // The default branch returned the bare "AI enrichment is unavailable." while
+    // the doc comment three lines above it said: never just "unavailable".
+    render(
+      <AiToggle available={false} reason={null} checked={false} onChange={vi.fn()} disabled={false} />,
+    );
+    const note = screen.getByText(/ai enrichment is unavailable/i);
+    expect(note).toHaveTextContent(/did not report a reason/i);
+  });
 });

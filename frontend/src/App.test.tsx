@@ -114,6 +114,67 @@ describe('App cancelled job', () => {
   });
 });
 
+describe('App upload progress', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'getConfig').mockResolvedValue(CONFIG);
+  });
+
+  it('shows per-file upload progress while the bytes are in flight', async () => {
+    // The XHR progress events were stored and never rendered. api.ts uses
+    // XMLHttpRequest instead of fetch solely to obtain them, because "a 200 MB
+    // scan over a VPN with no progress bar looks like a hang".
+    vi.spyOn(api, 'createUploads').mockResolvedValue({
+      jobId: 'j1',
+      uploads: [{ filename: 'scan.xml', url: 'https://s3/put' }],
+    });
+    vi.spyOn(api, 'startJob').mockResolvedValue({ jobId: 'j1' });
+    vi.spyOn(api, 'getJob').mockResolvedValue({ jobId: 'j1', status: 'running' });
+
+    let report!: (percent: number) => void;
+    vi.spyOn(api, 'uploadFile').mockImplementation(
+      (_url, _file, onProgress) =>
+        new Promise<void>(() => {
+          report = onProgress;
+        }),
+    );
+
+    render(<App />);
+    const input = await screen.findByLabelText(/scan results files/i);
+    await userEvent.upload(input, new File(['x'], 'scan.xml'));
+    await userEvent.click(screen.getByRole('button', { name: /^process$/i }));
+
+    const bar = await screen.findByRole('progressbar', { name: /scan\.xml/i });
+    expect(bar).toHaveAttribute('aria-valuenow', '0');
+
+    await act(async () => { report(64); });
+    await waitFor(() => expect(bar).toHaveAttribute('aria-valuenow', '64'));
+  });
+});
+
+describe('App cancel failure', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'getConfig').mockResolvedValue(CONFIG);
+  });
+
+  it('says so, loudly, when the cancel did not take', async () => {
+    // Previously a log() line in a scrolling role="log" region: the UI still said
+    // Processing and Cancel stayed enabled, so the operator had no way to tell
+    // whether the job had been stopped.
+    vi.spyOn(api, 'cancelJob').mockRejectedValue(new Error('Cancel rejected (503).'));
+    await runToTerminal({ jobId: 'j1', status: 'running' });
+
+    await userEvent.click(await screen.findByRole('button', { name: /^cancel$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be cancelled/i);
+    // Still processing — the app must not pretend otherwise.
+    expect(screen.getByRole('heading', { name: /processing/i })).toBeInTheDocument();
+  });
+});
+
 describe('App download failures', () => {
   beforeEach(() => {
     localStorage.clear();

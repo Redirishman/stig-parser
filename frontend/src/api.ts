@@ -14,10 +14,16 @@ import {
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-  });
+  // Content-Type ONLY when there is a body to describe. On a bodyless GET it is a
+  // lie about the request and, worse, it makes the request non-simple: against a
+  // cross-origin API Gateway the 1s status poll would drag a CORS preflight behind
+  // every tick (2 req/sec), and fail outright with 403 if OPTIONS is not wired.
+  const headers: Record<string, string> = {
+    ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+  };
+
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
 
   if (!res.ok) {
     // Prefer the server's curated message — it is written for the operator.

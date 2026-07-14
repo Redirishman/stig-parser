@@ -45,6 +45,20 @@ describe('ResultCard (success)', () => {
     expect(screen.getByText('Benchmark unmatched')).toBeInTheDocument();
   });
 
+  it('explains a zero-findings result rather than passing it off as a clean system', () => {
+    // The most alarming outcome the parser can produce: nothing was extracted at
+    // all. Unexplained it is pixel-identical to a genuinely compliant estate.
+    render(
+      <ResultCard status="complete"
+                  summary={{ files: 2, hosts: 3, findings: 0, cat1: 0, cat2: 0, cat3: 0 }}
+                  warnings={[]} error={null} ai={null} aiError={null}
+                  onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.getByText(/no findings were extracted/i)).toBeInTheDocument();
+    // Distinct from the zero-CAT case, which has a different cause.
+    expect(screen.queryByText(/not matched to a stig benchmark/i)).not.toBeInTheDocument();
+  });
+
   it('states the AI gate when enrichment did not run', () => {
     render(
       <ResultCard status="complete" summary={SUMMARY} warnings={[]} error={null}
@@ -52,6 +66,34 @@ describe('ResultCard (success)', () => {
                   onDownload={vi.fn()} onReset={vi.fn()} />,
     );
     expect(screen.getByText(/not available in this build/i)).toBeInTheDocument();
+  });
+
+  it('states the AI gate even when the server omits it', () => {
+    // `{ai && ai !== 'done' ? … : null}` rendered nothing at all for an absent
+    // gate — the exact silence the spec forbids.
+    render(
+      <ResultCard status="complete" summary={SUMMARY} warnings={[]} error={null}
+                  ai={null} aiError={null} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.getByText(/ai enrichment/i)).toBeInTheDocument();
+  });
+
+  it('says AI ran when it ran', () => {
+    render(
+      <ResultCard status="complete" summary={SUMMARY} warnings={[]} error={null}
+                  ai="done" aiError={null} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.getByText(/ai enrichment ran/i)).toBeInTheDocument();
+  });
+
+  it('never leaks the raw gate enum onto the accreditation artifact', () => {
+    render(
+      <ResultCard status="complete" summary={SUMMARY} warnings={[]} error={null}
+                  ai="disabled-by-request" aiError={null}
+                  onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.queryByText(/disabled-by-request/)).not.toBeInTheDocument();
+    expect(screen.getByText(/switched off for this job/i)).toBeInTheDocument();
   });
 
   it('downloads on request', async () => {
@@ -139,5 +181,26 @@ describe('ResultCard (error)', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /try again/i }));
     expect(onReset).toHaveBeenCalled();
+  });
+
+  it('still gives a reason when the server supplied none', () => {
+    // `<p>{error}</p>` with a null error rendered "Processing Failed" over an
+    // empty paragraph: a failure with no stated cause.
+    render(
+      <ResultCard status="error" summary={null} warnings={[]} error={null}
+                  ai={null} aiError={null} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(/did not report a reason/i);
+  });
+
+  it('offers a reconnect when contact with a running job was lost', () => {
+    // The message says the job may still be running, so the operator must have a
+    // way back to it.
+    render(
+      <ResultCard status="error" summary={null} warnings={[]}
+                  error="Lost contact with the server." ai={null} aiError={null}
+                  onReconnect={vi.fn()} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
   });
 });

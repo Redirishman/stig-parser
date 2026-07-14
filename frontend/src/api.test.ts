@@ -77,6 +77,29 @@ describe('api', () => {
     expect((await getJob('j1')).status).toBe('running');
   });
 
+  it('does not put Content-Type on a bodyless GET', async () => {
+    // Content-Type makes a GET a non-simple request: against a cross-origin API
+    // Gateway every 1s poll would drag a CORS preflight behind it (2 req/sec), and
+    // 403 outright if OPTIONS is not wired.
+    const fetchMock = mockFetch(200, { jobId: 'j1', status: 'running' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getJob('j1');
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers ?? {}).not.toHaveProperty('Content-Type');
+  });
+
+  it('still sends Content-Type on a request that has a body', async () => {
+    const fetchMock = mockFetch(201, { jobId: 'j1', uploads: [] });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createUploads(['a.xml']);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' });
+  });
+
   it('cancelJob returns the job status the server actually reports', async () => {
     // The job can finish between the click and StopExecution landing.
     vi.stubGlobal('fetch', mockFetch(200, { jobId: 'j1', status: 'complete' }));

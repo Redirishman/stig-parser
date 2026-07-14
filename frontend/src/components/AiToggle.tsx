@@ -1,3 +1,4 @@
+import { explainAiGate } from '../aiGate';
 import type { AiGate } from '../types';
 
 interface Props {
@@ -6,20 +7,6 @@ interface Props {
   checked: boolean;
   onChange: (value: boolean) => void;
   disabled: boolean;
-}
-
-/** Operator-facing text for each closed gate. Never just "unavailable". */
-function explain(reason: AiGate | null): string {
-  switch (reason) {
-    case 'disabled-globally':
-      return 'AI enrichment is unavailable — no model is approved for this deployment.';
-    case 'disabled-by-request':
-      return 'AI enrichment is switched off for this job.';
-    case 'failed':
-      return 'AI enrichment failed on the last run.';
-    default:
-      return 'AI enrichment is unavailable.';
-  }
 }
 
 /**
@@ -39,7 +26,7 @@ export default function AiToggle({ available, reason, checked, onChange, disable
         />
         AI enrichment
       </label>
-      {!available ? <p className="ai-toggle-note">{explain(reason)}</p> : null}
+      {!available ? <p className="ai-toggle-note">{explainAiGate(reason)}</p> : null}
     </div>
   );
 }
