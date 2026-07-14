@@ -58,6 +58,8 @@ export function useJob() {
   const lastProgress = useRef<string>('');
   const unchanged = useRef(0);
   const failures = useRef(0);
+  /** A poll is awaiting a response; the next interval tick must not start another. */
+  const inFlight = useRef(false);
 
   const log = useCallback((message: string) => {
     setState((s) => ({ ...s, log: [...s.log, { time: stamp(), message }] }));
@@ -99,6 +101,12 @@ export function useJob() {
 
   const poll = useCallback(
     async (jobId: string) => {
+      // A backend that answers in more than POLL_MS would otherwise have two or
+      // more polls in flight at once, each incrementing the same counters — the
+      // stall note and the "Lost contact" verdict would then fire after fewer
+      // real round-trips than they claim to wait for.
+      if (inFlight.current) return;
+      inFlight.current = true;
       try {
         const job = await api.getJob(jobId);
         failures.current = 0;
@@ -117,6 +125,15 @@ export function useJob() {
           }
         }
 
+        // settle owns the warnings on a terminal payload. Running the diff below
+        // first would overwrite them with the terminal payload's own (possibly
+        // absent) list, so settle's fallback to the previous state would find an
+        // already-emptied list and the earlier warnings would be lost.
+        if (TERMINAL_STATUSES.includes(job.status)) {
+          settle(job);
+          return;
+        }
+
         // Only re-render warnings when they actually changed: this list is in an
         // aria-live region, and rebuilding it every second spams screen readers.
         setState((s) =>
@@ -124,8 +141,6 @@ export function useJob() {
             ? s
             : { ...s, warnings: job.warnings ?? [] },
         );
-
-        if (TERMINAL_STATUSES.includes(job.status)) settle(job);
       } catch {
         failures.current += 1;
         if (failures.current >= DEAD_POLLS) {
@@ -137,6 +152,8 @@ export function useJob() {
             error: 'Lost contact with the server. The job may still be running.',
           }));
         }
+      } finally {
+        inFlight.current = false;
       }
     },
     [log, settle, stopPolling],
@@ -147,6 +164,12 @@ export function useJob() {
       stopPolling();
       failures.current = 0;
       unchanged.current = 0;
+      inFlight.current = false;
+      // The new job's first progress message may be the same string the previous
+      // job ended on. Carrying it over would make that message look unchanged —
+      // it would never reach the activity log, and the stall counter would start
+      // climbing on a job that has only just begun.
+      lastProgress.current = '';
       timer.current = setInterval(() => void poll(jobId), POLL_MS);
     },
     [poll, stopPolling],
@@ -182,6 +205,9 @@ export function useJob() {
         localStorage.removeItem(STORAGE_KEY);
         setState((s) => ({
           ...s,
+          // Drop the id too: nothing is running, so leaving it set would keep the
+          // Cancel action live against a job the server was never told to start.
+          jobId: null,
           status: 'error',
           error: err instanceof Error ? err.message : 'Upload failed.',
         }));
@@ -214,7 +240,7 @@ export function useJob() {
         } catch {
           /* details unavailable — still report the real status */
         }
-        settle({ ...(record ?? {}), status: status as JobStatus });
+        settle({ ...(record ?? {}), status });
       }
     } catch (err) {
       log(err instanceof Error ? err.message : 'Cancel failed.');

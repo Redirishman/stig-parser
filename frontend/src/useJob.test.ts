@@ -145,6 +145,62 @@ describe('useJob', () => {
     expect(result.current.state.warnings).toEqual(['Benchmark unmatched']);
   });
 
+  it('keeps warnings raised mid-run when the terminal payload omits them', async () => {
+    // The final poll need not repeat the warnings it already reported; losing
+    // them here would hide them from the success card the operator verifies.
+    vi.spyOn(api, 'getJob')
+      .mockResolvedValueOnce(job({ progress: 'Parsing…', warnings: ['Benchmark unmatched'] }))
+      .mockResolvedValueOnce(job({ status: 'complete', progress: 'Done.' }));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(result.current.state.warnings).toEqual(['Benchmark unmatched']);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    await waitFor(() => expect(result.current.state.status).toBe('complete'));
+    expect(result.current.state.warnings).toEqual(['Benchmark unmatched']);
+  });
+
+  it('logs the first progress message of a second job even if it repeats the first', async () => {
+    vi.spyOn(api, 'getJob').mockResolvedValue(job({ progress: 'Parsing…' }));
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(result.current.state.log.filter((l) => l.message === 'Parsing…')).toHaveLength(1);
+
+    // Cancel clears the log but must also clear the remembered progress message,
+    // or the next job's identical first message never reaches the log.
+    await act(async () => { await result.current.cancel(); });
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    expect(result.current.state.log.filter((l) => l.message === 'Parsing…')).toHaveLength(1);
+    expect(result.current.state.stalled).toBe(false);
+  });
+
+  it('does not stack polls on a backend slower than the poll interval', async () => {
+    // Each response takes 3s. Without an in-flight guard the interval would launch
+    // a poll every second, and the overlapping failures would reach DEAD_POLLS in
+    // far fewer than 10 real round-trips.
+    vi.spyOn(api, 'getJob').mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error('slow')), 3000);
+        }),
+    );
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, false); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+
+    // 15s at one 3s round-trip at a time: at most 5 polls, nowhere near 10 failures.
+    expect(vi.mocked(api.getJob).mock.calls.length).toBeLessThanOrEqual(5);
+    expect(result.current.state.status).not.toBe('error');
+  });
+
   it('reconnects to a stored in-flight job on mount', async () => {
     localStorage.setItem(STORAGE_KEY, 'j-old');
     vi.spyOn(api, 'getJob').mockResolvedValue(job({ jobId: 'j-old', status: 'running' }));

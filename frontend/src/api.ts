@@ -1,4 +1,4 @@
-import { ApiError, type Config, type Job, type UploadsResponse } from './types';
+import { ApiError, type Config, type Job, type JobStatus, type UploadsResponse } from './types';
 
 /**
  * Base url of the private API, injected at build time. Empty in dev and in
@@ -50,7 +50,12 @@ export function getResultUrl(jobId: string): Promise<{ url: string }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/result`);
 }
 
-export function cancelJob(jobId: string): Promise<{ jobId: string; status: string }> {
+/**
+ * The status is the job's real lifecycle state, not a free string: the caller
+ * puts it straight into the UI state, so a widened `string` here would let an
+ * unknown value through unchecked and render a status the app cannot handle.
+ */
+export function cancelJob(jobId: string): Promise<{ jobId: string; status: JobStatus }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
 }
 
