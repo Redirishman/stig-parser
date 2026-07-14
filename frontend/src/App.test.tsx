@@ -89,6 +89,31 @@ describe('App', () => {
   });
 });
 
+describe('App cancelled job', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'getConfig').mockResolvedValue(CONFIG);
+  });
+
+  it('shows a cancelled job as cancelled, not as a blank form', async () => {
+    // Reachable when the cancel POST fails at the network layer but the server
+    // processed it anyway: the next poll returns `cancelled`, settle() lands it,
+    // and `cancelled` belonged to neither the busy nor the finished set — so the
+    // app dropped the operator on a fresh form with no message and no log. They
+    // could not tell whether the job was cancelled, completed, or failed.
+    await runToTerminal({ jobId: 'j1', status: 'cancelled' });
+
+    expect(await screen.findByText(/cancelled/i)).toBeInTheDocument();
+    expect(screen.queryByText(/report ready/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /download excel report/i }),
+    ).not.toBeInTheDocument();
+    // Not a blank upload form.
+    expect(screen.queryByRole('button', { name: /^process$/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('App download failures', () => {
   beforeEach(() => {
     localStorage.clear();

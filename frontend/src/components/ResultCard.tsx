@@ -36,6 +36,34 @@ export default function ResultCard({
     );
   }
 
+  if (status === 'cancelled') {
+    return (
+      <div className="result-card cancelled" role="status">
+        <div className="result-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor"
+               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M8 12h8" />
+          </svg>
+        </div>
+        <h2>Job Cancelled</h2>
+        <p>
+          This job was stopped before it finished. No report was generated — the
+          scan files were not fully processed.
+        </p>
+        <WarningsBox warnings={warnings} title="Warnings recorded before the cancel" />
+        <button type="button" className="btn btn-secondary" onClick={onReset}>
+          Start Over
+        </button>
+      </div>
+    );
+  }
+
+  // Every remaining non-terminal status is a caller error, not a result. Rendering
+  // the success card for one would announce "Report Ready" for a report that was
+  // never written — the exact lie this card must never tell.
+  if (status !== 'complete') return null;
+
   // Findings exist but every severity is zero: the results were never matched to
   // a benchmark. Say so — a silent row of zeroes reads like a clean system.
   const zeroCats =

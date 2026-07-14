@@ -90,7 +90,11 @@ export default function App() {
 
   const busy = state.status === 'uploading' || state.status === 'queued' ||
                state.status === 'running' || state.status === 'pending';
-  const finished = state.status === 'complete' || state.status === 'error';
+  // 'cancelled' belongs here, not nowhere. Left out of both sets it fell through
+  // to the upload form: no message, no log, no explanation — the operator could
+  // not tell whether their job had been cancelled, had completed, or had failed.
+  const finished = state.status === 'complete' || state.status === 'error' ||
+                   state.status === 'cancelled';
 
   return (
     <div className="container">

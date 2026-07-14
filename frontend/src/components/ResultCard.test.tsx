@@ -52,6 +52,33 @@ describe('ResultCard (success)', () => {
   });
 });
 
+describe('ResultCard (cancelled)', () => {
+  it('never renders the success card for a cancelled job', () => {
+    // The success branch was guarded only by `status !== 'error'`, and the prop
+    // type admits 'cancelled' — so a cancelled job could render "Report Ready"
+    // with a live download button for a report that does not exist.
+    render(
+      <ResultCard status="cancelled" summary={SUMMARY} warnings={[]} error={null}
+                  ai={null} aiError={null} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.queryByText(/report ready/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /download excel report/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/cancelled/i);
+  });
+
+  it('offers a way back', async () => {
+    const onReset = vi.fn();
+    render(
+      <ResultCard status="cancelled" summary={null} warnings={[]} error={null}
+                  ai={null} aiError={null} onDownload={vi.fn()} onReset={onReset} />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /start over/i }));
+    expect(onReset).toHaveBeenCalled();
+  });
+});
+
 describe('ResultCard (error)', () => {
   it('uses role=alert and shows the message', () => {
     render(

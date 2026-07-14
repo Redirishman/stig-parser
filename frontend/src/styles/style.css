@@ -459,8 +459,11 @@ a:focus-visible {
   margin-bottom: 1.25rem;
 }
 
-.result-card.success .result-icon { color: var(--color-success); }
-.result-card.error   .result-icon { color: var(--color-danger); }
+.result-card.success   .result-icon { color: var(--color-success); }
+.result-card.error     .result-icon { color: var(--color-danger); }
+/* Cancelled is neither good nor bad news — it is the operator's own doing. Muted,
+   so it is never mistaken for a failure or for a finished report. */
+.result-card.cancelled .result-icon { color: var(--color-muted); }
 
 .result-card .btn + .btn {
   margin-left: .75rem;
