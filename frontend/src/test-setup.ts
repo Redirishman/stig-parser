@@ -1,5 +1,9 @@
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { toHaveNoViolations } from 'jest-axe';
+import { expect, vi } from 'vitest';
+
+/** axe-core assertions: `expect(await axe(container)).toHaveNoViolations()`. */
+expect.extend(toHaveNoViolations);
 
 /**
  * React Testing Library only knows how to drive *jest's* fake timers: `waitFor`
