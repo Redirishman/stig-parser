@@ -75,6 +75,12 @@ python -m flask --app app.web:create_app run
 
 Open `http://localhost:5000`. Upload your scan results files (and, for non-SCC scanners, the matching STIG benchmark files), click **Process**, then download the Excel report.
 
+### GovCloud SPA
+
+A React frontend for the private GovCloud deployment lives in `frontend/`. The
+Flask UI above still works and is the recommended way to run the tool locally or
+air-gapped — it needs no AWS account and no Node toolchain.
+
 ### CLI
 
 ```bash
