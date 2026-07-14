@@ -52,12 +52,19 @@ def run_parse_stage(
     jobs: JobStore,
     *,
     work_dir: Path,
+    input_store: ArtifactStore | None = None,
 ) -> bool:
     """Download inputs, parse+match+filter, upload ``findings.json``.
+
+    Inputs are read from ``input_store`` and ``findings.json`` is written to
+    ``store``. They default to the same store (the Flask and CLI paths use one
+    local root); the GovCloud deployment passes a separate uploads bucket so
+    raw uploads can carry a shorter retention than generated artifacts.
 
     Returns True on success. On failure sets job status to ``error`` with a
     user-safe message and returns False.
     """
+    source = input_store or store
     work_dir = Path(work_dir)
     input_dir = work_dir / "input"
     extract_dir = work_dir / "extract"
@@ -78,7 +85,7 @@ def run_parse_stage(
         local_inputs: list[Path] = []
         for name in input_filenames:
             dest = input_dir / name
-            store.download_to(f"{prefix}/{name}", dest)
+            source.download_to(f"{prefix}/{name}", dest)
             local_inputs.append(dest)
         result = parse_stage(local_inputs, [], extract_dir)
     except PipelineError as exc:

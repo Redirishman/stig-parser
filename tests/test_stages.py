@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.core.artifact_store import LocalArtifactStore
 from app.core.findings_io import findings_from_json
 from app.core.job_store import MemoryJobStore
@@ -99,3 +101,30 @@ def test_findings_key_roundtrips_through_store(tmp_path):
         store.get_bytes(FINDINGS_KEY.format(job_id=job_id)).decode()
     )
     assert loaded == []
+
+
+def test_run_parse_stage_reads_inputs_from_a_separate_store(tmp_path):
+    """GovCloud keeps raw uploads in their own bucket (shorter retention), so
+    inputs may come from a different store than the one findings are written to."""
+    uploads = LocalArtifactStore(tmp_path / "uploads")
+    artifacts = LocalArtifactStore(tmp_path / "artifacts")
+    jobs = MemoryJobStore()
+    job_id = "job1"
+    jobs.create(job_id, status="running")
+
+    scan = Path(__file__).parent / "fixtures" / "scc_results.xml"
+    _seed_input(uploads, job_id, "scan.xml", scan.read_bytes())
+
+    result = run_parse_stage(
+        job_id,
+        ["scan.xml"],
+        artifacts,
+        jobs,
+        work_dir=tmp_path / "w",
+        input_store=uploads,
+    )
+
+    assert result is True
+    # Findings land in the artifacts store; the uploads store stays input-only.
+    assert artifacts.exists(FINDINGS_KEY.format(job_id=job_id))
+    assert not uploads.exists(FINDINGS_KEY.format(job_id=job_id))

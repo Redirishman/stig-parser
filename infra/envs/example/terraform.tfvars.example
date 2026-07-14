@@ -1,0 +1,57 @@
+# Copy to terraform.tfvars (gitignored) and fill in for your environment.
+#
+# Every value below is a PLACEHOLDER. None of them are safe defaults for a real
+# GovCloud environment — each marked (D#) is an org decision from spec §2 that
+# someone must actually make.
+
+# Must yield globally-unique S3 bucket names; add an account-scoped suffix.
+name_prefix = "stig-condenser-example"
+
+# (D1) Region split. Bedrock lives in us-gov-west-1; the rest of the stack may
+# or may not, depending on where your org puts workloads.
+aws_region     = "us-gov-west-1"
+bedrock_region = "us-gov-west-1"
+
+# Must not overlap anything reachable over the VPN. Ask the network team.
+vpc_cidr             = "10.0.0.0/16"
+private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+
+# (D5) CUI retention. These placeholders are deliberately conservative and are
+# NOT a records-policy recommendation — confirm with the ISSO / records officer.
+upload_retention_days   = 7   # raw scan results: shortest — no reason to keep them
+artifact_retention_days = 30  # generated reports the operator downloads
+job_ttl_days            = 30  # job status records (filenames, warnings)
+trail_retention_days    = 365 # audit trail: longest
+
+# Built by infra/scripts/build-layer.sh ON LINUX for python_runtime. A layer
+# built on macOS/Windows imports fine locally and dies at cold start in Lambda.
+dependency_layer_zip = "../../build/deps-layer.zip"
+python_runtime       = "python3.12"
+
+# (D4) Bedrock model. Empty = AI is off everywhere: the enricher role gets no
+# bedrock permission, and the API reports the gate as `disabled-globally`.
+# Filling this in turns enrichment on and is an ATO-relevant change.
+bedrock_model_id = ""
+
+# Killswitch: an SSM parameter whose value must be exactly "enabled" for AI to
+# run. Anything else — or an unreadable parameter — disables AI (fails closed).
+ai_killswitch_param = "" # e.g. "/stig-condenser/ai-enabled"
+
+# (D3) Upstream auth. The header is recorded on jobs for audit only; the API
+# never makes an authorization decision from it. Auth is enforced upstream.
+identity_header = "" # e.g. "x-forwarded-user"
+
+# (D6) Private SPA serving: apigw_s3_proxy | lambda_served | none
+spa_serving_mode = "apigw_s3_proxy"
+
+# Alarms fire into the void until an SNS topic is wired up. Fine for a first
+# apply; not fine for production.
+alarm_actions = []
+
+# Your org's tagging standard goes here — data classification, system owner,
+# ATO boundary.
+tags = {
+  System      = "stig-condenser"
+  Environment = "example"
+  # DataClassification = "CUI"
+}

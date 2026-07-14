@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from typing import Any, Protocol, runtime_checkable
 
 import boto3
@@ -63,9 +64,16 @@ class DynamoJobStore:
     ``ConditionExpression``).
     """
 
-    def __init__(self, table_name: str, region: str, client: Any = None):
+    def __init__(
+        self,
+        table_name: str,
+        region: str,
+        client: Any = None,
+        ttl_days: int | None = None,
+    ):
         self._table = table_name
         self._client = client or boto3.client("dynamodb", region_name=region)
+        self._ttl_days = ttl_days
 
     def create(self, job_id: str, **fields: Any) -> None:
         self._put(job_id, dict(fields))
@@ -92,10 +100,14 @@ class DynamoJobStore:
         )
 
     def _put(self, job_id: str, record: dict) -> None:
-        self._client.put_item(
-            TableName=self._table,
-            Item={
-                "job_id": {"S": job_id},
-                "data": {"S": json.dumps(record)},
-            },
-        )
+        item: dict[str, dict] = {
+            "job_id": {"S": job_id},
+            "data": {"S": json.dumps(record)},
+        }
+        # The table's TTL policy watches a top-level `expiresAt` attribute, so it
+        # cannot live inside the JSON `data` blob. Without this the table expires
+        # nothing and job records (CUI) accumulate forever.
+        if self._ttl_days is not None:
+            expires_at = int(time.time()) + self._ttl_days * 86400
+            item["expiresAt"] = {"N": str(expires_at)}
+        self._client.put_item(TableName=self._table, Item=item)
