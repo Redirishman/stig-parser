@@ -15,7 +15,7 @@ export default function App() {
   const [benchmarks, setBenchmarks] = useState<File[]>([]);
   const [ai, setAi] = useState(false);
 
-  const { state, submit, cancel, reset } = useJob();
+  const { state, submit, cancel, reset, canCancel } = useJob();
 
   // The gate and the upload limits are server-side state. Without them the form
   // cannot validate a file or honestly describe the AI control, so it is not
@@ -136,7 +136,16 @@ export default function App() {
               </p>
             ) : null}
             <div className="progress-actions">
-              <button type="button" className="btn btn-secondary" onClick={() => void cancel()}>
+              {/* Disabled until the job id lands: the upload round-trip renders
+                  this button before there is anything to cancel, and a live
+                  button that silently does nothing is worse than a dead one the
+                  operator can see is not ready yet. */}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={!canCancel}
+                onClick={() => void cancel()}
+              >
                 Cancel
               </button>
             </div>

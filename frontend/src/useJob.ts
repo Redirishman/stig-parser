@@ -282,5 +282,13 @@ export function useJob() {
 
   useEffect(() => stopPolling, [stopPolling]);
 
-  return { state, submit, cancel, reset };
+  // submit() flips the status to `uploading` — which renders the Cancel button —
+  // before createUploads() has come back with the id that cancel() needs. Against
+  // a real API over a VPN that round-trip is not instant, and in that window a
+  // Cancel that calls cancel() would silently no-op: a dead control. The button
+  // is therefore disabled until the id exists. A disabled control that becomes
+  // enabled is honest; a live control that does nothing is not.
+  const canCancel = state.jobId !== null;
+
+  return { state, submit, cancel, reset, canCancel };
 }
