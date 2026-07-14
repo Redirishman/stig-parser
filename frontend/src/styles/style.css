@@ -512,6 +512,19 @@ a:focus-visible {
   color: var(--color-danger);
 }
 
+/* A download that produced no file. Danger, not warning: the operator clicked
+   and got nothing, and this is the only thing that will tell them why. */
+.download-error {
+  font-size: var(--text-small);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: .5rem .75rem;
+  max-width: 26rem;
+  margin: 0 auto 1rem;
+  text-align: left;
+}
+
 .summary-note {
   font-size: var(--text-small);
   color: var(--color-warning-text);

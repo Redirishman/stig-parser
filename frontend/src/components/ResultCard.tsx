@@ -8,12 +8,14 @@ interface Props {
   error: string | null;
   ai: AiGate | null;
   aiError: string | null;
+  /** Why the last Download click did not produce a file. */
+  downloadError?: string | null;
   onDownload: () => void;
   onReset: () => void;
 }
 
 export default function ResultCard({
-  status, summary, warnings, error, ai, aiError, onDownload, onReset,
+  status, summary, warnings, error, ai, aiError, downloadError, onDownload, onReset,
 }: Props) {
   if (status === 'error') {
     return (
@@ -75,6 +77,12 @@ export default function ResultCard({
       {/* The AI gate, stated plainly. Never silently absent. */}
       {ai && ai !== 'done' ? (
         <p className="summary-note">{aiError ?? `AI enrichment: ${ai}.`}</p>
+      ) : null}
+
+      {/* role=alert, not a console line: a download that produced no file has to
+          say so where the operator is looking. */}
+      {downloadError ? (
+        <p className="download-error" role="alert">{downloadError}</p>
       ) : null}
 
       <button type="button" className="btn btn-primary" onClick={onDownload}>

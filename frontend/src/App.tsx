@@ -5,7 +5,7 @@ import AiToggle from './components/AiToggle';
 import ResultCard from './components/ResultCard';
 import UploadZone from './components/UploadZone';
 import WarningsBox from './components/WarningsBox';
-import type { Config } from './types';
+import { ApiError, type Config } from './types';
 import { useJob } from './useJob';
 
 export default function App() {
@@ -14,6 +14,7 @@ export default function App() {
   const [results, setResults] = useState<File[]>([]);
   const [benchmarks, setBenchmarks] = useState<File[]>([]);
   const [ai, setAi] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const { state, submit, cancel, reset, canCancel } = useJob();
 
@@ -32,15 +33,39 @@ export default function App() {
     })();
   }, []);
 
+  // An unhandled rejection here used to mean the operator clicked Download and
+  // nothing happened at all — on a card that still said "Report Ready". Every
+  // outcome now says something true, in the UI, not the console.
   async function onDownload() {
     if (!state.jobId) return;
-    const { url } = await api.getResultUrl(state.jobId);
-    window.location.href = url;
+    setDownloadError(null);
+    try {
+      const { url } = await api.getResultUrl(state.jobId);
+      window.location.href = url;
+    } catch (err) {
+      // 409: the object is not on S3 yet. Not an error — the operator is early,
+      // and the job is still finishing. Saying nothing is the correct behaviour.
+      if (err instanceof ApiError && err.status === 409) return;
+      // 410: the retention window closed and the report was deleted. This is not
+      // a transient "download failed" — retrying will never work, and the
+      // operator needs to know to re-run the scan, not to click again.
+      if (err instanceof ApiError && err.status === 410) {
+        setDownloadError(
+          'This report has expired. Reports are deleted after the retention ' +
+            'window closes. Process the scan files again to generate a new one.',
+        );
+        return;
+      }
+      setDownloadError(
+        err instanceof Error ? err.message : 'Could not download the report.',
+      );
+    }
   }
 
   function onReset() {
     setResults([]);
     setBenchmarks([]);
+    setDownloadError(null);
     reset();
   }
 
@@ -162,6 +187,7 @@ export default function App() {
               error={state.error}
               ai={state.ai}
               aiError={state.aiError}
+              downloadError={downloadError}
               onDownload={() => void onDownload()}
               onReset={onReset}
             />
