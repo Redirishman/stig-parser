@@ -1,9 +1,22 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import ResultCard from './ResultCard';
 
 const SUMMARY = { files: 2, hosts: 3, findings: 10, cat1: 1, cat2: 4, cat3: 5 };
+
+// Read from disk, not `import '…style.css'`: vitest stubs css imports out, and a
+// stub would make the dead-selector assertion below vacuous. Comments are dropped
+// so a class named in prose is never mistaken for a live rule.
+const CSS = readFileSync(join(process.cwd(), 'src/styles/style.css'), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '');
+
+/** Every selector in style.css that mentions the CAT I highlight class. */
+const CAT1_SELECTORS = [...CSS.matchAll(/([^{}]*\bsummary-cat1-open\b[^{}]*)\{/g)].map(
+  (m) => m[1].trim(),
+);
 
 describe('ResultCard (success)', () => {
   it('announces the report and shows the summary', () => {
@@ -49,6 +62,36 @@ describe('ResultCard (success)', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /download excel report/i }));
     expect(onDownload).toHaveBeenCalled();
+  });
+});
+
+describe('ResultCard (CAT I highlight)', () => {
+  function catOneDd(cat1: number): HTMLElement {
+    const { container } = render(
+      <ResultCard status="complete" summary={{ ...SUMMARY, cat1 }} warnings={[]} error={null}
+                  ai={null} aiError={null} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    const rows = [...container.querySelectorAll('.summary-row')];
+    const row = rows.find((r) => /CAT I —/.test(r.querySelector('dt')?.textContent ?? ''));
+    return row!.querySelector('dd') as HTMLElement;
+  }
+
+  it('marks the CAT I count when high-severity findings are open', () => {
+    expect(catOneDd(3)).toHaveClass('summary-cat1-open');
+  });
+
+  it('does not mark the CAT I count when it is zero', () => {
+    expect(catOneDd(0)).not.toHaveClass('summary-cat1-open');
+  });
+
+  it('the stylesheet rule for the highlight actually selects that element', () => {
+    // The class was on the <dd>; the CSS selected a <dd> *inside* it
+    // (`.summary-cat1-open dd`), so it matched nothing. Open CAT I findings — the
+    // one bit of colour that says "this system has high findings" — rendered in
+    // the same neutral ink as a zero.
+    const dd = catOneDd(3);
+    expect(CAT1_SELECTORS.length).toBeGreaterThan(0);
+    expect(CAT1_SELECTORS.some((sel) => dd.matches(sel))).toBe(true);
   });
 });
 

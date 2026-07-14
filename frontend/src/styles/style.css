@@ -477,9 +477,10 @@ a:focus-visible {
   border-top: 1px solid var(--color-border);
 }
 
-/* When the zero-severity note follows, tighten the gap to it (no negative
-   margins): :has scopes this to exactly the case where the note is visible. */
-.result-card:has(#summary-note:not([hidden])) .report-summary {
+/* When a note follows the summary, tighten the gap to it (no negative margins):
+   :has scopes this to exactly the case where a note is rendered. The note is a
+   class, not an id — the old `#summary-note` selector matched nothing. */
+.result-card:has(.summary-note) .report-summary {
   margin-bottom: .75rem;
 }
 
@@ -511,7 +512,11 @@ a:focus-visible {
   padding-left: 1rem;
 }
 
-.summary-cat1-open dd {
+/* The class is on the <dd> itself. The old `.summary-cat1-open dd` selected a
+   <dd> *inside* it and so matched nothing — open CAT I findings rendered in the
+   same neutral ink as a zero. This is the one bit of colour on the card that says
+   the system has high-severity findings; it has to actually land. */
+dd.summary-cat1-open {
   color: var(--color-danger);
 }
 
