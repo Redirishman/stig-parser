@@ -1,4 +1,11 @@
-import { ApiError, type Config, type Job, type JobStatus, type UploadsResponse } from './types';
+import {
+  ApiError,
+  UploadAbortedError,
+  type Config,
+  type Job,
+  type JobStatus,
+  type UploadsResponse,
+} from './types';
 
 /**
  * Base url of the private API, injected at build time. Empty in dev and in
@@ -67,21 +74,36 @@ export function cancelJob(jobId: string): Promise<{ jobId: string; status: JobSt
  *
  * The bytes never pass through a Lambda — that is what keeps a large upload
  * clear of API Gateway's 29-second ceiling.
+ *
+ * `signal` makes the transfer abortable. A 200 MB scan over a VPN occupies this
+ * call for minutes; a Cancel in that window has to actually stop the bytes, not
+ * merely stop watching them.
  */
 export function uploadFile(
   url: string,
   file: File,
   onProgress: (percent: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new UploadAbortedError());
+      return;
+    }
+
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
+
+    const abort = () => xhr.abort();
+    signal?.addEventListener('abort', abort);
+    const cleanup = () => signal?.removeEventListener('abort', abort);
 
     xhr.upload.onprogress = (e: ProgressEvent) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
     };
 
     xhr.onload = () => {
+      cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress(100);
         resolve();
@@ -90,7 +112,16 @@ export function uploadFile(
         reject(new ApiError(xhr.status, `Upload failed for ${file.name} (${xhr.status}).`));
       }
     };
-    xhr.onerror = () => reject(new ApiError(0, `Upload failed for ${file.name}.`));
+    xhr.onerror = () => {
+      cleanup();
+      reject(new ApiError(0, `Upload failed for ${file.name}.`));
+    };
+    // xhr.abort() fires this, not onerror. A deliberate abort is not a failure:
+    // its own type keeps the caller from reporting "Upload failed" for a Cancel.
+    xhr.onabort = () => {
+      cleanup();
+      reject(new UploadAbortedError());
+    };
 
     xhr.send(file);
   });

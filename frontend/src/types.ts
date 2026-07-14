@@ -72,3 +72,15 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+
+/**
+ * An upload the operator called off. Distinct from ApiError because a Cancel is
+ * not a failure: reporting it as one would tell the operator their upload broke
+ * when in fact they stopped it.
+ */
+export class UploadAbortedError extends Error {
+  constructor() {
+    super('Upload cancelled.');
+    this.name = 'UploadAbortedError';
+  }
+}

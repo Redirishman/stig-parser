@@ -34,7 +34,12 @@ describe('useJob', () => {
 
     await act(async () => { await result.current.submit(files, false); });
 
-    expect(api.uploadFile).toHaveBeenCalledWith('https://s3/a', files[0], expect.any(Function));
+    expect(api.uploadFile).toHaveBeenCalledWith(
+      'https://s3/a',
+      files[0],
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
     expect(api.startJob).toHaveBeenCalledWith('j1', false);
     expect(localStorage.getItem(STORAGE_KEY)).toBe('j1');
   });
@@ -246,5 +251,67 @@ describe('useJob', () => {
 
     expect(result.current.state.status).toBe('idle');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('cancel mid-upload never starts the job', async () => {
+    // The upload window is minutes long (200 MB over a VPN). A Cancel in that
+    // window must stop the submit, not let its async continuation run on and
+    // start — and orphan — the very job the operator just called off.
+    vi.spyOn(api, 'getJob').mockResolvedValue(job());
+    let releaseUpload!: () => void;
+    vi.spyOn(api, 'uploadFile').mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseUpload = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useJob());
+
+    let submitted!: Promise<void>;
+    await act(async () => {
+      submitted = result.current.submit(files, false);
+      // Let createUploads resolve so the job id — and Cancel — exist.
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => { await result.current.cancel(); });
+    await act(async () => {
+      releaseUpload();
+      await submitted;
+    });
+
+    expect(api.startJob).not.toHaveBeenCalled();
+    expect(result.current.state.status).toBe('idle');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('cancel mid-upload aborts the in-flight upload', async () => {
+    // Without an abort the bytes keep flowing after Cancel: the operator is told
+    // nothing is happening while their VPN is still saturated.
+    vi.spyOn(api, 'getJob').mockResolvedValue(job());
+    let seen: AbortSignal | undefined;
+    vi.spyOn(api, 'uploadFile').mockImplementation(
+      (_url, _file, _onProgress, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          seen = signal;
+          signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    const { result } = renderHook(() => useJob());
+
+    let submitted!: Promise<void>;
+    await act(async () => {
+      submitted = result.current.submit(files, false);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(seen?.aborted).toBe(false);
+
+    await act(async () => { await result.current.cancel(); });
+    await act(async () => { await submitted; });
+
+    expect(seen?.aborted).toBe(true);
+    // An aborted upload is not an upload failure — do not cry error at the operator.
+    expect(result.current.state.status).toBe('idle');
+    expect(result.current.state.error).toBeNull();
   });
 });

@@ -60,6 +60,15 @@ export function useJob() {
   const failures = useRef(0);
   /** A poll is awaiting a response; the next interval tick must not start another. */
   const inFlight = useRef(false);
+  /**
+   * Trips when the operator cancels (or resets) the submit that is currently
+   * uploading. submit() runs for minutes inside its own async continuation, so
+   * clearing state alone would not stop it: it would keep pushing bytes and then
+   * start the very job that was called off — orphaned, because cancel() has
+   * already dropped the id from storage. Every await in submit() is followed by
+   * a check on this signal.
+   */
+  const submitAbort = useRef<AbortController | null>(null);
 
   const log = useCallback((message: string) => {
     setState((s) => ({ ...s, log: [...s.log, { time: stamp(), message }] }));
@@ -177,9 +186,14 @@ export function useJob() {
 
   const submit = useCallback(
     async (files: File[], ai: boolean) => {
+      const controller = new AbortController();
+      submitAbort.current = controller;
+      const { signal } = controller;
+
       setState({ ...INITIAL, status: 'uploading' });
       try {
         const { jobId, uploads } = await api.createUploads(files.map((f) => f.name));
+        if (signal.aborted) return;
         setState((s) => ({ ...s, jobId }));
         localStorage.setItem(STORAGE_KEY, jobId);
         log('Uploading files…');
@@ -187,19 +201,32 @@ export function useJob() {
         for (const target of uploads) {
           const file = files.find((f) => f.name === target.filename);
           if (!file) continue;
-          await api.uploadFile(target.url, file, (percent) =>
-            setState((s) => ({
-              ...s,
-              uploadProgress: { ...s.uploadProgress, [target.filename]: percent },
-            })),
+          await api.uploadFile(
+            target.url,
+            file,
+            (percent) =>
+              setState((s) => ({
+                ...s,
+                uploadProgress: { ...s.uploadProgress, [target.filename]: percent },
+              })),
+            signal,
           );
+          if (signal.aborted) return;
         }
 
+        // Last gate before the point of no return: a Cancel that landed while the
+        // final upload was resolving must never become a started job.
+        if (signal.aborted) return;
         log('Upload complete. Queued for processing…');
         await api.startJob(jobId, ai);
+        if (signal.aborted) return;
         setState((s) => ({ ...s, status: 'queued' }));
         startPolling(jobId);
       } catch (err) {
+        // A cancelled upload rejects too. cancel() owns the UI from that point;
+        // reporting it here would tell the operator their upload broke when in
+        // fact they stopped it.
+        if (signal.aborted) return;
         // An upload that failed means the pipeline would parse a partial set —
         // so the job is never started. Clear the id: nothing is running.
         localStorage.removeItem(STORAGE_KEY);
@@ -219,6 +246,9 @@ export function useJob() {
   const cancel = useCallback(async () => {
     const jobId = state.jobId;
     if (!jobId) return;
+    // First, before any await: stop the upload loop dead and abort the in-flight
+    // XHR. Everything below races with a submit() that may still be uploading.
+    submitAbort.current?.abort();
     log('Cancelling…');
     try {
       const { status } = await api.cancelJob(jobId);
@@ -248,6 +278,7 @@ export function useJob() {
   }, [state.jobId, log, settle, stopPolling]);
 
   const reset = useCallback(() => {
+    submitAbort.current?.abort();
     stopPolling();
     localStorage.removeItem(STORAGE_KEY);
     lastProgress.current = '';
