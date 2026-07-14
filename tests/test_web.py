@@ -268,8 +268,8 @@ class TestUploadValidation:
         assert "Unsupported file type" in r.get_json()["error"]
 
     def test_oversized_file_rejected(self, client, monkeypatch):
-        import app.web as web
-        monkeypatch.setattr(web, "_MAX_UPLOAD_BYTES", 16)
+        import app.core.uploads as uploads
+        monkeypatch.setattr(uploads, "MAX_UPLOAD_BYTES", 16)
         data = {"results": (io.BytesIO(b"x" * 64), "big.xml")}
         r = client.post("/api/process", data=data, content_type="multipart/form-data")
         assert r.status_code == 400
