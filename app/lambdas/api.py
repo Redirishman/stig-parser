@@ -235,6 +235,32 @@ def _post_jobs(event: dict) -> dict:
     if not record:
         return _response(404, {"error": "Unknown job."})
 
+    # DO NOT REMOVE — this guard closes a real race, not a theoretical one.
+    #
+    # The client does POST /uploads -> upload -> POST /jobs. If the operator hits
+    # Cancel while POST /jobs is still in flight, POST /jobs/{id}/cancel can land
+    # FIRST: it finds no execution to stop (none started yet), marks the record
+    # `cancelled`, and returns 200. The UI then drops the job id and tells the
+    # operator the job was cancelled. The in-flight POST /jobs then arrives.
+    #
+    # Without this check that late request would flip the record back to `queued`
+    # and start the pipeline anyway — a job the operator was told was cancelled
+    # runs to completion, burning Step Functions and Lambda, and its report is
+    # unreachable because the client no longer holds the id. A client-side abort
+    # cannot fix this: the two requests race at the server, so the server has to
+    # be the authority. Refuse to resurrect a record that has already settled.
+    status = record.get("status")
+    if status in TERMINAL_STATUSES:
+        log.info("refusing to start job %s — already %s", job_id, status)
+        return _response(
+            409,
+            {
+                "jobId": str(job_id),
+                "status": status,
+                "error": f"This job is already {status} and cannot be started.",
+            },
+        )
+
     ai_enabled, ai_reason = _ai_gate(bool(body.get("ai")))
     jobs.update(
         str(job_id),

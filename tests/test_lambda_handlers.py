@@ -214,6 +214,75 @@ class TestApiJobs:
         )
         assert resp["statusCode"] == 404
 
+    def test_cancelled_job_is_not_started_by_an_in_flight_submit(
+        self, aws, jobs, monkeypatch
+    ):
+        """The cancel-beats-start race: a cancelled record must stay cancelled.
+
+        POST /jobs/{id}/cancel can land while POST /jobs is still in flight. The
+        operator has already been told the job was cancelled and no longer holds
+        the job id — so the late start must be refused, or the pipeline runs a job
+        nobody can see or reach.
+        """
+        calls = []
+        self._start(monkeypatch, calls)
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        # The cancel wins the race.
+        jobs.update("job1", status="cancelled", progress="Cancelled.")
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 409
+        assert calls == []  # no execution started
+        assert jobs.get("job1")["status"] == "cancelled"  # not flipped to queued
+        assert "cancelled" in json.loads(resp["body"])["error"]
+
+    @pytest.mark.parametrize("status", ["complete", "error"])
+    def test_settled_job_is_not_restarted(self, aws, jobs, monkeypatch, status):
+        calls = []
+        self._start(monkeypatch, calls)
+        jobs.create("job1", status=status, input_filenames=["scan.xml"])
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 409
+        assert calls == []
+        assert jobs.get("job1")["status"] == status
+
+    def test_pending_job_still_starts_normally(self, aws, jobs, monkeypatch):
+        """The guard must not break the ordinary path."""
+        calls = []
+        self._start(monkeypatch, calls)
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert len(calls) == 1
+        assert jobs.get("job1")["status"] == "queued"
+
     def test_ai_off_when_no_model_configured(self, aws, jobs, monkeypatch):
         calls = []
         self._start(monkeypatch, calls)
