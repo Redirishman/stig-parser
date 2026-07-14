@@ -22,7 +22,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: |
+          # The runner ships a setuptools older than the PYSEC-2026-3447 fix.
+          # build-system.requires only governs the isolated build env, so the
+          # ambient runtime copy must be upgraded here or the audit gate trips.
+          pip install --upgrade "setuptools>=83.0.0"
+          pip install -e ".[dev]"
 
       - name: Security audit (dependencies)
         run: pip-audit
