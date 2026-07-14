@@ -59,6 +59,28 @@ def _rate_limited(client_ip: str) -> bool:
 _TEMP_DIR = Path(os.environ.get("STIG_TEMP_DIR", Path(__file__).parent.parent / "tmp"))
 _ORPHAN_MAX_AGE_HOURS = 8
 
+# Upload allow-list and per-file size cap. Results accept XCCDF (.xml), CKLB
+# checklists (.cklb), and Nessus compliance scans (.nessus); benchmarks accept
+# .xml and DISA .zip bundles. Reject anything else before touching disk.
+_ALLOWED_UPLOAD_EXT = {".xml", ".zip", ".cklb", ".nessus"}
+_MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # per file
+
+
+def _reject_upload(fs) -> str | None:
+    """Return a user-safe rejection message for a bad upload, else None."""
+    if Path(fs.filename).suffix.lower() not in _ALLOWED_UPLOAD_EXT:
+        return (
+            f"Unsupported file type: {fs.filename!r} "
+            f"(allowed: .xml, .zip, .cklb, .nessus)"
+        )
+    # Measure the stream without loading it: seek to end, read position, rewind.
+    fs.stream.seek(0, os.SEEK_END)
+    size = fs.stream.tell()
+    fs.stream.seek(0)
+    if size > _MAX_UPLOAD_BYTES:
+        return f"File too large: {fs.filename!r} (max 200 MB each)"
+    return None
+
 
 def _job_dir(job_id: str) -> Path:
     return _TEMP_DIR / job_id
@@ -90,6 +112,27 @@ def create_app(secret_key: str | None = None) -> Flask:
         _secret = os.urandom(32).hex()
     app.secret_key = _secret
     app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB total upload
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Strict",
+        # SESSION_COOKIE_SECURE stays False: the tool ships over local http.
+        # Full CSRF tokens skipped — single-user localhost tool; SameSite=Strict
+        # blocks cross-site cookie send. Revisit if deployed multi-user.
+    )
+
+    @app.after_request
+    def _security_headers(resp: Response) -> Response:
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        # Strict CSP — no inline script/style. The page's JS lives in
+        # static/app.js and its CSS in static/style.css, so 'self' suffices.
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; object-src 'none'; frame-ancestors 'none'; "
+            "base-uri 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self'"
+        )
+        return resp
 
     _sweep_orphaned_jobs()
 
@@ -127,6 +170,15 @@ def create_app(secret_key: str | None = None) -> Flask:
 
         if not results_files or all(f.filename == "" for f in results_files):
             return jsonify({"error": "No results files uploaded."}), 400
+
+        # Validate every upload before creating any job dir — a bad type or
+        # oversized file must not leave an orphan directory on disk.
+        for f in (*results_files, *benchmark_files):
+            if not f.filename:
+                continue
+            msg = _reject_upload(f)
+            if msg:
+                return jsonify({"error": msg}), 400
 
         job_id = str(uuid.uuid4())
         job_dir = _job_dir(job_id)
