@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import UploadZone from './UploadZone';
@@ -44,7 +44,27 @@ describe('UploadZone', () => {
     const onChange = setup();
     const input = screen.getByLabelText(/scan results files/i);
 
-    await userEvent.upload(input, new File(['x'], 'payload.exe'));
+    // applyAccept: false — userEvent emulates the OS picker's `accept` filter and
+    // would drop payload.exe before it ever reached the component. A real drag-drop
+    // performs no such filtering, so bad files DO reach us. This test exercises that
+    // path: the one where rejectFile() is the only thing standing between a junk file
+    // and the API.
+    await userEvent.upload(input, new File(['x'], 'payload.exe'), { applyAccept: false });
+
+    expect(onChange).not.toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: 'payload.exe' })]),
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(/unsupported file type/i);
+  });
+
+  it('rejects a disallowed file dropped onto the zone', () => {
+    // The native `accept` attribute cannot protect this path — drag-and-drop ignores
+    // it — so rejectFile() must catch it here too.
+    const onChange = setup();
+    const zone = screen.getByRole('heading', { name: /scan results/i }).closest('.upload-zone');
+    const bad = new File(['x'], 'payload.exe');
+
+    fireEvent.drop(zone!, { dataTransfer: { files: [bad], types: ['Files'] } });
 
     expect(onChange).not.toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ name: 'payload.exe' })]),

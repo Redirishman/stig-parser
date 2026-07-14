@@ -81,15 +81,16 @@ export default function UploadZone({
       <label htmlFor={`${id}-input`} className="visually-hidden">
         {title} files
       </label>
-      {/* No native `accept` filter: it silently greys files out with no
-          explanation, and drag-and-drop ignores it anyway. rejectFile() is the
-          single validation path, and it always says why a file was dropped. */}
+      {/* `accept` is a convenience only: it pre-filters the OS file picker so the
+          operator sees the right file types. It is NOT validation — drag-and-drop
+          bypasses it entirely, and a picker filter can be overridden. rejectFile()
+          is the real gate on every path, and it always says why a file was dropped. */}
       <input
         id={`${id}-input`}
         ref={inputRef}
         type="file"
         multiple
-        data-accept={accept}
+        accept={accept}
         hidden
         disabled={disabled}
         onChange={(e) => {
