@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as api from './api';
 import ActivityLog from './components/ActivityLog';
 import AiToggle from './components/AiToggle';
@@ -33,6 +33,39 @@ export default function App() {
       }
     })();
   }, []);
+
+  const busy = state.status === 'uploading' || state.status === 'queued' ||
+               state.status === 'running' || state.status === 'pending';
+  // 'cancelled' belongs here, not nowhere. Left out of both sets it fell through
+  // to the upload form: no message, no log, no explanation — the operator could
+  // not tell whether their job had been cancelled, had completed, or had failed.
+  const finished = state.status === 'complete' || state.status === 'error' ||
+                   state.status === 'cancelled';
+
+  const phase = finished ? 'finished' : busy ? 'busy' : 'upload';
+
+  // WCAG 2.4.3. Each phase swaps out a whole <section>: the button the operator
+  // just pressed is unmounted, and with nothing else done, focus falls to <body>
+  // — a keyboard or screen-reader operator is silently dumped at the top of the
+  // document on every transition, with no announcement of what changed. Focus
+  // instead lands on the heading of the section that replaced it.
+  const uploadHeading = useRef<HTMLHeadingElement>(null);
+  const busyHeading = useRef<HTMLHeadingElement>(null);
+  const resultHeading = useRef<HTMLHeadingElement>(null);
+  const lastPhase = useRef(phase);
+
+  useEffect(() => {
+    // First paint is not a transition — the operator has not acted, and moving
+    // their focus for them would be its own violation.
+    if (lastPhase.current === phase) return;
+    lastPhase.current = phase;
+
+    const heading =
+      phase === 'busy' ? busyHeading.current
+      : phase === 'finished' ? resultHeading.current
+      : uploadHeading.current;
+    heading?.focus();
+  }, [phase]);
 
   // An unhandled rejection here used to mean the operator clicked Download and
   // nothing happened at all — on a card that still said "Report Ready". Every
@@ -89,14 +122,6 @@ export default function App() {
     );
   }
 
-  const busy = state.status === 'uploading' || state.status === 'queued' ||
-               state.status === 'running' || state.status === 'pending';
-  // 'cancelled' belongs here, not nowhere. Left out of both sets it fell through
-  // to the upload form: no message, no log, no explanation — the operator could
-  // not tell whether their job had been cancelled, had completed, or had failed.
-  const finished = state.status === 'complete' || state.status === 'error' ||
-                   state.status === 'cancelled';
-
   return (
     <div className="container">
       <header>
@@ -111,6 +136,12 @@ export default function App() {
       <main>
         {!busy && !finished ? (
           <section>
+            {/* The landing point after a reset. The form's own headings belong to
+                the two upload zones, so the section needs one of its own to hand
+                focus to; it is for the screen reader, not the eye. */}
+            <h2 className="visually-hidden" tabIndex={-1} ref={uploadHeading}>
+              Upload scan files
+            </h2>
             <div className="upload-grid">
               <UploadZone
                 id="results"
@@ -158,7 +189,7 @@ export default function App() {
 
         {busy ? (
           <section>
-            <h2>Processing</h2>
+            <h2 tabIndex={-1} ref={busyHeading}>Processing</h2>
             <UploadProgress progress={state.status === 'uploading' ? state.uploadProgress : {}} />
             <ActivityLog lines={state.log} />
             {state.stalled ? (
@@ -193,6 +224,7 @@ export default function App() {
         {finished ? (
           <section>
             <ResultCard
+              headingRef={resultHeading}
               status={state.status}
               summary={state.summary}
               warnings={state.warnings}

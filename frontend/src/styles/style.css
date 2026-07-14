@@ -285,6 +285,15 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
+/* Section headings take focus on each state transition (WCAG 2.4.3) — a sighted
+   keyboard operator must be able to SEE where they were just moved to, so this is
+   :focus, not :focus-visible: the move is programmatic, and the heuristic behind
+   :focus-visible cannot be relied on to reveal it. */
+h2[tabindex='-1']:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────────── */
 
 .btn {

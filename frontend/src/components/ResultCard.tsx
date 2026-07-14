@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import { explainAiGate } from '../aiGate';
 import type { AiGate, Summary } from '../types';
 // The one source of truth for what the UI can be showing. A local
@@ -6,6 +7,12 @@ import type { UiStatus } from '../useJob';
 import WarningsBox from './WarningsBox';
 
 interface Props {
+  /**
+   * The card's heading, so App can move focus to it when this card replaces the
+   * processing screen. Without it the operator's focus falls to <body> on every
+   * transition (WCAG 2.4.3) — silently, at the top of the document.
+   */
+  headingRef?: RefObject<HTMLHeadingElement>;
   status: UiStatus;
   summary: Summary | null;
   warnings: string[];
@@ -21,7 +28,7 @@ interface Props {
 }
 
 export default function ResultCard({
-  status, summary, warnings, error, ai, aiError, downloadError, onReconnect,
+  headingRef, status, summary, warnings, error, ai, aiError, downloadError, onReconnect,
   onDownload, onReset,
 }: Props) {
   if (status === 'error') {
@@ -33,7 +40,7 @@ export default function ResultCard({
             <path d="M18 6 6 18M6 6l12 12" />
           </svg>
         </div>
-        <h2>Processing Failed</h2>
+        <h2 tabIndex={-1} ref={headingRef}>Processing Failed</h2>
         {/* A null error used to render an empty paragraph: "Processing Failed",
             no reason, nothing to act on. */}
         <p>
@@ -65,7 +72,7 @@ export default function ResultCard({
             <path d="M8 12h8" />
           </svg>
         </div>
-        <h2>Job Cancelled</h2>
+        <h2 tabIndex={-1} ref={headingRef}>Job Cancelled</h2>
         <p>
           This job was stopped before it finished. No report was generated — the
           scan files were not fully processed.
@@ -104,7 +111,7 @@ export default function ResultCard({
           <path d="M20 6 9 17l-5-5" pathLength={1} />
         </svg>
       </div>
-      <h2>Report Ready</h2>
+      <h2 tabIndex={-1} ref={headingRef}>Report Ready</h2>
 
       {summary ? (
         <dl className="report-summary">

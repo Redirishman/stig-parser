@@ -114,6 +114,58 @@ describe('App cancelled job', () => {
   });
 });
 
+describe('App focus management (WCAG 2.4.3)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'getConfig').mockResolvedValue(CONFIG);
+  });
+
+  it('moves focus to the new section on every state transition', async () => {
+    // App swaps whole <section>s. The focused Process button unmounts, and focus
+    // falls to <body> — the keyboard and screen-reader operator is silently
+    // dumped at the top of the document on every transition.
+    const getJob = vi
+      .spyOn(api, 'getJob')
+      .mockResolvedValue({ jobId: 'j1', status: 'running' });
+    vi.spyOn(api, 'createUploads').mockResolvedValue({
+      jobId: 'j1',
+      uploads: [{ filename: 'scan.xml', url: 'https://s3/put' }],
+    });
+    vi.spyOn(api, 'uploadFile').mockResolvedValue(undefined);
+    vi.spyOn(api, 'startJob').mockResolvedValue({ jobId: 'j1' });
+
+    render(<App />);
+    const input = await screen.findByLabelText(/scan results files/i);
+    await userEvent.upload(input, new File(['x'], 'scan.xml'));
+    await userEvent.click(screen.getByRole('button', { name: /^process$/i }));
+
+    // After Process: the processing heading, not <body>.
+    const processing = await screen.findByRole('heading', { name: /processing/i });
+    await waitFor(() => expect(processing).toHaveFocus());
+
+    // After completion: the result heading, not <body>.
+    getJob.mockResolvedValue({ jobId: 'j1', status: 'complete', summary: SUMMARY });
+    const ready = await screen.findByRole(
+      'heading', { name: /report ready/i }, { timeout: 5000 },
+    );
+    await waitFor(() => expect(ready).toHaveFocus());
+
+    // And back again on reset.
+    await userEvent.click(screen.getByRole('button', { name: /process another set/i }));
+    const upload = await screen.findByRole('heading', { name: /upload scan files/i });
+    await waitFor(() => expect(upload).toHaveFocus());
+  });
+
+  it('does not steal focus on first paint', async () => {
+    // Nothing transitioned — the operator has not acted yet, and moving focus for
+    // them would be its own violation.
+    render(<App />);
+    await screen.findByRole('button', { name: /^process$/i });
+    expect(document.body).toHaveFocus();
+  });
+});
+
 describe('App upload progress', () => {
   beforeEach(() => {
     localStorage.clear();
