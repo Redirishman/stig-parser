@@ -69,7 +69,10 @@ test('upload → poll → report ready', async ({ page }) => {
   await page.getByRole('button', { name: 'Process' }).click();
 
   await expect(page.getByRole('status')).toContainText('Report Ready', { timeout: 15_000 });
-  await expect(page.getByText('5')).toBeVisible();
+  // The Findings cell specifically. `getByText('5')` was a whole-page substring
+  // match that passed by luck — it would have gone on passing had the findings
+  // count rendered as 0, so long as a 5 appeared anywhere else on the page.
+  await expect(page.locator('.summary-total dd')).toHaveText('5');
   // Warnings must survive onto the success card.
   await expect(page.getByText('Benchmark unmatched for 1 file')).toBeVisible();
 });

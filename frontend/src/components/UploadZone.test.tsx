@@ -15,7 +15,6 @@ function setup(files: File[] = [], onChange = vi.fn()) {
       limits={LIMITS}
       files={files}
       onChange={onChange}
-      disabled={false}
     />,
   );
   return onChange;

@@ -6,7 +6,6 @@ interface Props {
   reason: AiGate | null;
   checked: boolean;
   onChange: (value: boolean) => void;
-  disabled: boolean;
 }
 
 /**
@@ -14,14 +13,14 @@ interface Props {
  * an operator who cannot see the control never learns the capability exists, or
  * why it is off. Spec §4.1 — AI being off is never silent.
  */
-export default function AiToggle({ available, reason, checked, onChange, disabled }: Props) {
+export default function AiToggle({ available, reason, checked, onChange }: Props) {
   return (
     <div className="ai-toggle">
       <label>
         <input
           type="checkbox"
           checked={available && checked}
-          disabled={disabled || !available}
+          disabled={!available}
           onChange={(e) => onChange(e.target.checked)}
         />
         AI enrichment

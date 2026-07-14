@@ -9,12 +9,11 @@ interface Props {
   limits: UploadLimits;
   files: File[];
   onChange: (files: File[]) => void;
-  disabled: boolean;
   badge?: string;
 }
 
 export default function UploadZone({
-  id, title, description, accept, limits, files, onChange, disabled, badge,
+  id, title, description, accept, limits, files, onChange, badge,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -41,7 +40,6 @@ export default function UploadZone({
   function onDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragging(false);
-    if (disabled) return;
     add(Array.from(e.dataTransfer.files));
   }
 
@@ -73,7 +71,6 @@ export default function UploadZone({
         type="button"
         className="btn btn-secondary"
         onClick={() => inputRef.current?.click()}
-        disabled={disabled}
       >
         Choose Files
       </button>
@@ -92,7 +89,6 @@ export default function UploadZone({
         multiple
         accept={accept}
         hidden
-        disabled={disabled}
         onChange={(e) => {
           add(Array.from(e.target.files ?? []));
           e.target.value = ''; // let the same file be re-picked after a remove
@@ -111,7 +107,6 @@ export default function UploadZone({
               type="button"
               className="file-remove"
               aria-label={`Remove ${f.name}`}
-              disabled={disabled}
               onClick={() => onChange(files.filter((_, idx) => idx !== i))}
             >
               ×

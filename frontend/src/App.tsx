@@ -151,7 +151,6 @@ export default function App() {
                 limits={config}
                 files={results}
                 onChange={setResults}
-                disabled={false}
               />
               <UploadZone
                 id="benchmarks"
@@ -162,7 +161,6 @@ export default function App() {
                 limits={config}
                 files={benchmarks}
                 onChange={setBenchmarks}
-                disabled={false}
               />
             </div>
 
@@ -171,7 +169,6 @@ export default function App() {
               reason={config.aiReason}
               checked={ai}
               onChange={setAi}
-              disabled={false}
             />
 
             <div className="form-actions">
