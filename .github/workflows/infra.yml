@@ -1,0 +1,90 @@
+name: Infra
+
+on:
+  push:
+    branches: ["master"]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  pull_request:
+    branches: ["master"]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+
+# No plan/apply here: that needs GovCloud credentials and a private runner with
+# reach into the VPC. This workflow is a static gate only (spec §8).
+permissions:
+  contents: read
+
+jobs:
+  leak-scan:
+    name: Leak scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # This repo is public. An account id, VPC/subnet/endpoint id or a real ARN
+      # committed to a tracked .tf file is a disclosure, and rewriting git
+      # history after the fact does not un-publish it. Spec §5.
+      - name: No environment-specific values in tracked files
+        run: |
+          set -euo pipefail
+          pattern='[0-9]{12}|vpc-[0-9a-f]{8,}|subnet-[0-9a-f]{8,}|vpce-[0-9a-f]{8,}|arn:aws-us-gov:[^$"]*[0-9]{12}'
+          # Search tracked files only — a developer's real tfvars is gitignored,
+          # and scanning the working tree would flag it and fail every local run.
+          if git grep -nEI "$pattern" -- 'infra/**' ':!infra/**/*.example'; then
+            echo "::error::Environment-specific value found in a tracked infra file (spec §5)."
+            exit 1
+          fi
+          echo "Leak scan clean."
+
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform fmt -check -recursive infra/
+
+      # -backend=false: validation must not need the org's real state bucket.
+      - name: Validate every module and the example env
+        run: |
+          set -euo pipefail
+          for dir in infra/modules/*/ infra/envs/example/; do
+            echo "==> $dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Lint
+        run: |
+          set -euo pipefail
+          tflint --init --chdir=infra
+          tflint --chdir=infra --recursive --minimum-failure-severity=error
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/
+          framework: terraform
+          # HIGH and above fails the build. Documented exceptions live in
+          # infra/README.md — a skipped check must have a reason written down.
+          soft_fail: false
+          quiet: true

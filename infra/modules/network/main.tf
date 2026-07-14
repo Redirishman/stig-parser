@@ -27,6 +27,90 @@ resource "aws_vpc" "this" {
   tags = merge(var.tags, { Name = "${var.name_prefix}-vpc" })
 }
 
+# Every VPC ships a default security group that allows all traffic between any
+# ENI attached to it. Nothing here uses it, but an ENI created later without an
+# explicit SG lands in it — so it is emptied rather than left as a latent hole.
+resource "aws_default_security_group" "this" {
+  vpc_id = aws_vpc.this.id
+
+  # No ingress, no egress blocks == deny all.
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-default-DO-NOT-USE" })
+}
+
+# ---------------------------------------------------------------------------
+# Flow logs
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "flow" {
+  count = var.enable_flow_logs ? 1 : 0
+
+  name              = "/aws/vpc/${var.name_prefix}"
+  retention_in_days = var.flow_log_retention_days
+  kms_key_id        = var.kms_key_arn
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-flow-logs" })
+}
+
+data "aws_iam_policy_document" "flow_assume" {
+  count = var.enable_flow_logs ? 1 : 0
+
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["vpc-flow-logs.amazonaws.com"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "flow" {
+  count = var.enable_flow_logs ? 1 : 0
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams",
+    ]
+    resources = ["${aws_cloudwatch_log_group.flow[0].arn}:*"]
+  }
+}
+
+resource "aws_iam_role" "flow" {
+  count = var.enable_flow_logs ? 1 : 0
+
+  name               = "${var.name_prefix}-flow-logs"
+  assume_role_policy = data.aws_iam_policy_document.flow_assume[0].json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy" "flow" {
+  count = var.enable_flow_logs ? 1 : 0
+
+  name   = "${var.name_prefix}-flow-logs"
+  role   = aws_iam_role.flow[0].id
+  policy = data.aws_iam_policy_document.flow[0].json
+}
+
+# ALL traffic, not just rejects: in a VPC with no internet route, an *accepted*
+# connection to somewhere unexpected is the interesting event.
+resource "aws_flow_log" "this" {
+  count = var.enable_flow_logs ? 1 : 0
+
+  vpc_id                   = aws_vpc.this.id
+  traffic_type             = "ALL"
+  iam_role_arn             = aws_iam_role.flow[0].arn
+  log_destination_type     = "cloud-watch-logs"
+  log_destination          = aws_cloudwatch_log_group.flow[0].arn
+  max_aggregation_interval = 60
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-flow-logs" })
+}
+
 resource "aws_subnet" "private" {
   count             = length(var.private_subnet_cidrs)
   vpc_id            = aws_vpc.this.id
@@ -58,6 +142,7 @@ resource "aws_route_table_association" "private" {
 
 # Lambda ENIs. Egress-only; ingress is never needed (Lambda is not a target).
 resource "aws_security_group" "lambda" {
+  #checkov:skip=CKV2_AWS_5:Attached to the Lambda ENIs by the compute module (vpc_config.security_group_ids). checkov cannot see the attachment across a module boundary.
   name_prefix = "${var.name_prefix}-lambda-"
   description = "STIG Condenser Lambda ENIs — egress to VPC endpoints only."
   vpc_id      = aws_vpc.this.id

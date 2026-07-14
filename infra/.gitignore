@@ -22,6 +22,11 @@
 backend.tf
 !backend.tf.example
 
+# Build artifacts: the dependency layer zip (~30 MB of compiled wheels) and the
+# source zip Terraform packages. Both are reproducible from source.
+build/
+modules/compute/.build/
+
 # Crash logs
 crash.log
 crash.*.log

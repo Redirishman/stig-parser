@@ -19,6 +19,12 @@ variable "kms_deletion_window_days" {
   default     = 30
 }
 
+variable "access_log_retention_days" {
+  description = "Lifecycle expiry for S3 server access logs. These record who touched which object key, so they usually outlive the objects themselves."
+  type        = number
+  default     = 365
+}
+
 variable "tags" {
   description = "Tags applied to every resource."
   type        = map(string)

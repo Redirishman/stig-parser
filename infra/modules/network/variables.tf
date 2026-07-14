@@ -33,6 +33,24 @@ variable "enable_monitoring_endpoint" {
   default     = false
 }
 
+variable "enable_flow_logs" {
+  description = "Record VPC flow logs. On by default: this VPC has no route to the internet, so any traffic to an unexpected destination is worth having a record of."
+  type        = bool
+  default     = true
+}
+
+variable "flow_log_retention_days" {
+  description = "Retention for the flow-log group."
+  type        = number
+  default     = 365
+}
+
+variable "kms_key_arn" {
+  description = "CMK for the flow-log group. Required when enable_flow_logs is true."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Tags applied to every resource."
   type        = map(string)
