@@ -23,6 +23,14 @@ locals {
   # wildcard "any model" grant that would quietly become live the day a model
   # is enabled in the account.
   bedrock_model_arn = var.bedrock_model_id == "" ? null : "arn:${local.partition}:bedrock:${var.bedrock_region}::foundation-model/${var.bedrock_model_id}"
+
+  # StopExecution acts on an execution ARN, which is a different resource type
+  # from the state machine ARN:
+  #   arn:<p>:states:<r>:<a>:stateMachine:<name>
+  #   arn:<p>:states:<r>:<a>:execution:<name>:<execution-name>
+  # Executions are named for the job id, so the wildcard covers exactly this
+  # state machine's executions and nothing else.
+  execution_arn_pattern = "${replace(var.state_machine_arn, ":stateMachine:", ":execution:")}:*"
 }
 
 # ---------------------------------------------------------------------------
@@ -156,6 +164,17 @@ data "aws_iam_policy_document" "api" {
     effect    = "Allow"
     actions   = ["states:StartExecution"]
     resources = [var.state_machine_arn]
+  }
+
+  # Cancel. StopExecution is granted on the state machine's EXECUTIONS, not on
+  # the state machine itself — a common way to get this wrong is to reuse the
+  # StartExecution resource above, which produces a policy that never matches
+  # and an AccessDenied the first time an operator clicks Cancel.
+  statement {
+    sid       = "CancelPipeline"
+    effect    = "Allow"
+    actions   = ["states:StopExecution"]
+    resources = [local.execution_arn_pattern]
   }
 
   dynamic "statement" {

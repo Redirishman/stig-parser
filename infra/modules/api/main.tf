@@ -82,6 +82,12 @@ resource "aws_api_gateway_rest_api_policy" "this" {
 # Routes -> API Lambda (proxy integration)
 # ---------------------------------------------------------------------------
 
+resource "aws_api_gateway_resource" "config" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_rest_api.this.root_resource_id
+  path_part   = "config"
+}
+
 resource "aws_api_gateway_resource" "uploads" {
   rest_api_id = aws_api_gateway_rest_api.this.id
   parent_id   = aws_api_gateway_rest_api.this.root_resource_id
@@ -106,14 +112,22 @@ resource "aws_api_gateway_resource" "job_result" {
   path_part   = "result"
 }
 
+resource "aws_api_gateway_resource" "job_cancel" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.job.id
+  path_part   = "cancel"
+}
+
 locals {
   # The api handler dispatches on (httpMethod, resource), so these keys must stay
   # in step with app/lambdas/api.py.
   routes = {
+    get_config   = { resource_id = aws_api_gateway_resource.config.id, method = "GET" }
     post_uploads = { resource_id = aws_api_gateway_resource.uploads.id, method = "POST" }
     post_jobs    = { resource_id = aws_api_gateway_resource.jobs.id, method = "POST" }
     get_job      = { resource_id = aws_api_gateway_resource.job.id, method = "GET" }
     get_result   = { resource_id = aws_api_gateway_resource.job_result.id, method = "GET" }
+    post_cancel  = { resource_id = aws_api_gateway_resource.job_cancel.id, method = "POST" }
   }
 }
 

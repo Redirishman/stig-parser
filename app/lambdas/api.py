@@ -2,10 +2,13 @@
 
 Routes (REST API proxy integration):
 
-    POST /uploads            -> create a job, return presigned PUT urls
-    POST /jobs               -> start the Step Functions execution
-    GET  /jobs/{job_id}      -> job status record
-    GET  /jobs/{job_id}/result -> presigned GET url for report.xlsx
+    GET  /config                 -> AI gate + upload limits (the client needs
+                                    both BEFORE it can render or validate)
+    POST /uploads                -> create a job, return presigned PUT urls
+    POST /jobs                   -> start the Step Functions execution
+    GET  /jobs/{job_id}          -> job status record
+    GET  /jobs/{job_id}/result   -> presigned GET url for report.xlsx
+    POST /jobs/{job_id}/cancel   -> stop the execution, mark the job cancelled
 
 Uploads never pass through this function: the browser PUTs straight to S3 with
 a presigned url, which keeps the 29-second API Gateway timeout and the Lambda
@@ -25,7 +28,7 @@ import uuid
 import boto3
 
 from app.core.stages import REPORT_KEY
-from app.core.uploads import reject_filename
+from app.core.uploads import ALLOWED_UPLOAD_EXT, MAX_UPLOAD_BYTES, reject_filename
 from app.lambdas import common
 
 log = logging.getLogger(__name__)
@@ -36,6 +39,9 @@ PRESIGN_EXPIRY_SECONDS = 900
 # reports which of these applies, so AI being off is never silent.
 AI_DISABLED_BY_REQUEST = "disabled-by-request"
 AI_DISABLED_GLOBALLY = "disabled-globally"
+
+# A job in one of these states is finished; there is nothing left to cancel.
+TERMINAL_STATUSES = frozenset({"complete", "error", "cancelled"})
 
 
 def _response(status: int, body: dict) -> dict:
@@ -100,6 +106,90 @@ def _body(event: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+def _get_config() -> dict:
+    """Everything the client must know before it can render or validate anything.
+
+    Two things live only on the server, and a client that guesses at either is
+    wrong:
+
+    * **The AI gate.** Whether enrichment is available depends on the configured
+      Bedrock model and the SSM killswitch. Without this endpoint the UI could
+      only learn the gate *after* submitting a job — too late to tell the
+      operator why the AI control is unavailable, which is the silent-failure
+      mode the spec (§4.1) exists to prevent.
+    * **The upload allow-list.** The client validates files for fast feedback.
+      Hardcoding the extensions and size cap there would fork the list that
+      app/core/uploads.py exists to keep single. Serving it means one source of
+      truth.
+
+    Client-side validation is a courtesy, never a control: every filename is
+    re-validated server-side in _post_uploads, because a client check is
+    bypassable by definition.
+    """
+    ai_available, ai_reason = _ai_gate(requested=True)
+    return _response(
+        200,
+        {
+            "aiAvailable": ai_available,
+            # Why AI is unavailable, in the same vocabulary the job record uses.
+            "aiReason": None if ai_available else ai_reason,
+            "maxUploadBytes": MAX_UPLOAD_BYTES,
+            "allowedExtensions": sorted(ALLOWED_UPLOAD_EXT),
+        },
+    )
+
+
+def _post_cancel(job_id: str) -> dict:
+    """Stop a running execution and mark the job cancelled.
+
+    Reports the job's ACTUAL resulting status rather than asserting "cancelled":
+    an execution can finish in the window between the operator's click and
+    StopExecution landing, and claiming a completed job was cancelled would be a
+    lie the operator then acts on.
+    """
+    jobs = common.job_store()
+    record = jobs.get(job_id)
+    if not record:
+        return _response(404, {"error": "Unknown job."})
+
+    status = record.get("status")
+    if status in TERMINAL_STATUSES:
+        # Already finished — nothing to stop. Report what actually happened.
+        return _response(200, {"jobId": job_id, "status": status})
+
+    sfn = boto3.client("stepfunctions", region_name=common.region())
+    execution_arn = _execution_arn(job_id)
+    try:
+        sfn.stop_execution(
+            executionArn=execution_arn,
+            error="CancelledByOperator",
+            cause="The operator cancelled this job.",
+        )
+    except sfn.exceptions.ExecutionDoesNotExist:
+        # The execution finished and aged out, or never started. The job record
+        # is still ours to settle.
+        log.info("no live execution to stop for job %s", job_id)
+    except Exception:
+        log.exception("StopExecution failed for job %s", job_id)
+        return _response(500, {"error": "Could not cancel the job — see server logs."})
+
+    jobs.update(job_id, status="cancelled", progress="Cancelled.")
+    return _response(200, {"jobId": job_id, "status": "cancelled"})
+
+
+def _execution_arn(job_id: str) -> str:
+    """The execution ARN for a job.
+
+    Executions are named for the job id (see _post_jobs), so the ARN is derivable
+    rather than something we must store.
+    """
+    state_machine_arn = os.environ["STATE_MACHINE_ARN"]
+    # arn:<partition>:states:<region>:<account>:stateMachine:<name>
+    #   -> arn:<partition>:states:<region>:<account>:execution:<name>:<job_id>
+    prefix, _, name = state_machine_arn.rpartition(":stateMachine:")
+    return f"{prefix}:execution:{name}:{job_id}"
 
 
 def _post_uploads(event: dict) -> dict:
@@ -206,8 +296,15 @@ def handler(event: dict, context: object = None) -> dict:
     job_id = (event.get("pathParameters") or {}).get("job_id")
 
     try:
+        if method == "GET" and resource.endswith("/config"):
+            return _get_config()
         if method == "POST" and resource.endswith("/uploads"):
             return _post_uploads(event)
+        # Checked before the bare /jobs route: "/jobs/{job_id}/cancel" would
+        # otherwise never match, since endswith("/jobs") is false but the
+        # ordering below is what makes the distinction legible.
+        if method == "POST" and resource.endswith("/cancel") and job_id:
+            return _post_cancel(str(job_id))
         if method == "POST" and resource.endswith("/jobs"):
             return _post_jobs(event)
         if method == "GET" and resource.endswith("/result") and job_id:

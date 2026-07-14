@@ -432,3 +432,165 @@ class TestAiGateSettles:
         exporter.handler({"jobId": "job1"}, None)
 
         assert jobs.get("job1")["ai"] == "disabled-by-request"
+
+
+class TestApiConfig:
+    """The client cannot render the AI control or validate a file without these."""
+
+    def test_reports_ai_unavailable_with_a_reason(self, aws):
+        resp = api.handler({"httpMethod": "GET", "resource": "/config"}, None)
+        body = json.loads(resp["body"])
+
+        assert resp["statusCode"] == 200
+        assert body["aiAvailable"] is False
+        # A bare "false" would leave the UI unable to say WHY — the silent gate
+        # the spec forbids.
+        assert body["aiReason"] == "disabled-globally"
+
+    def test_reports_ai_available_when_a_model_is_configured(self, aws, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "some.model")
+        body = json.loads(
+            api.handler({"httpMethod": "GET", "resource": "/config"}, None)["body"]
+        )
+        assert body["aiAvailable"] is True
+        assert body["aiReason"] is None
+
+    def test_serves_the_shared_upload_allow_list(self, aws):
+        """Served, not hardcoded in the client — otherwise the list forks."""
+        from app.core.uploads import ALLOWED_UPLOAD_EXT, MAX_UPLOAD_BYTES
+
+        body = json.loads(
+            api.handler({"httpMethod": "GET", "resource": "/config"}, None)["body"]
+        )
+        assert set(body["allowedExtensions"]) == ALLOWED_UPLOAD_EXT
+        assert body["maxUploadBytes"] == MAX_UPLOAD_BYTES
+
+
+class TestApiCancel:
+    def _fake_sfn(self, monkeypatch, calls, raises=None, raise_missing=False):
+        monkeypatch.setenv(
+            "STATE_MACHINE_ARN",
+            "arn:aws-us-gov:states:us-gov-west-1:111111111111:stateMachine:stig",
+        )
+
+        class _ExecutionDoesNotExist(Exception):
+            pass
+
+        class FakeExceptions:
+            # Bound to a differently-named outer class on purpose: inside a class
+            # body, `X = X` resolves the right-hand side in the global scope, not
+            # the enclosing function's, and would raise NameError.
+            ExecutionDoesNotExist = _ExecutionDoesNotExist
+
+        class FakeSfn:
+            exceptions = FakeExceptions()
+
+            def stop_execution(self, **kwargs):
+                calls.append(kwargs)
+                if raise_missing:
+                    # Must be raised from THIS fake's class — the handler catches
+                    # sfn.exceptions.ExecutionDoesNotExist off the same client.
+                    raise _ExecutionDoesNotExist()
+                if raises:
+                    raise raises
+
+        real_client = boto3.client
+
+        def fake_client(service, **kwargs):
+            if service == "stepfunctions":
+                return FakeSfn()
+            return real_client(service, **kwargs)
+
+        monkeypatch.setattr(api.boto3, "client", fake_client)
+        return _ExecutionDoesNotExist
+
+    def test_stops_the_execution_and_marks_the_job(self, aws, jobs, monkeypatch):
+        calls = []
+        self._fake_sfn(monkeypatch, calls)
+        jobs.create("job1", status="running")
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs/{job_id}/cancel",
+                "pathParameters": {"job_id": "job1"},
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 200
+        assert json.loads(resp["body"])["status"] == "cancelled"
+        assert jobs.get("job1")["status"] == "cancelled"
+        # StopExecution takes an EXECUTION arn, not the state machine arn.
+        assert calls[0]["executionArn"] == (
+            "arn:aws-us-gov:states:us-gov-west-1:111111111111:execution:stig:job1"
+        )
+
+    def test_finished_job_reports_its_real_status_not_cancelled(
+        self, aws, jobs, monkeypatch
+    ):
+        """The job can finish between the click and StopExecution landing.
+        Claiming a completed job was cancelled is a lie the operator acts on."""
+        calls = []
+        self._fake_sfn(monkeypatch, calls)
+        jobs.create("job1", status="complete")
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs/{job_id}/cancel",
+                "pathParameters": {"job_id": "job1"},
+            },
+            None,
+        )
+
+        assert json.loads(resp["body"])["status"] == "complete"
+        assert not calls  # nothing to stop
+        assert jobs.get("job1")["status"] == "complete"
+
+    def test_missing_execution_still_settles_the_job(self, aws, jobs, monkeypatch):
+        """The execution can age out; the job record is still ours to settle."""
+        calls = []
+        self._fake_sfn(monkeypatch, calls, raise_missing=True)
+        jobs.create("job1", status="running")
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs/{job_id}/cancel",
+                "pathParameters": {"job_id": "job1"},
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 200
+        assert jobs.get("job1")["status"] == "cancelled"
+
+    def test_unknown_job_is_404(self, aws, monkeypatch):
+        self._fake_sfn(monkeypatch, [])
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs/{job_id}/cancel",
+                "pathParameters": {"job_id": "nope"},
+            },
+            None,
+        )
+        assert resp["statusCode"] == 404
+
+    def test_stop_failure_does_not_claim_success(self, aws, jobs, monkeypatch):
+        self._fake_sfn(monkeypatch, [], raises=RuntimeError("boom"))
+        jobs.create("job1", status="running")
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs/{job_id}/cancel",
+                "pathParameters": {"job_id": "job1"},
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 500
+        # The job is still running — do not mark it cancelled when it is not.
+        assert jobs.get("job1")["status"] == "running"
