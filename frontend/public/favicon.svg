@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .shield { fill: #1f5fc4; }
+    .check { stroke: #fdfdfe; }
+    @media (prefers-color-scheme: dark) {
+      .shield { fill: #82aef2; }
+      .check { stroke: #10151c; }
+    }
+  </style>
+  <path class="shield" d="M16 2 L28 7 V15 C28 22.5 23 28 16 30 C9 28 4 22.5 4 15 V7 Z"/>
+  <path class="check" d="M10.5 16 L14.5 20 L21.5 12" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
