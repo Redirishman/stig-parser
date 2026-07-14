@@ -239,7 +239,10 @@ export function useJob() {
         // final upload was resolving must never become a started job.
         if (signal.aborted) return;
         log('Upload complete. Queued for processing…');
-        await api.startJob(jobId, ai);
+        // The signal goes to the server call itself, not just the check after it:
+        // a Cancel during this round-trip aborts the POST outright. (If it lands
+        // anyway, the server refuses to start a job it has already cancelled.)
+        await api.startJob(jobId, ai, signal);
         if (signal.aborted) return;
         setState((s) => ({ ...s, status: 'queued' }));
         startPolling(jobId);

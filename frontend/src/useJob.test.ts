@@ -40,7 +40,7 @@ describe('useJob', () => {
       expect.any(Function),
       expect.any(AbortSignal),
     );
-    expect(api.startJob).toHaveBeenCalledWith('j1', false);
+    expect(api.startJob).toHaveBeenCalledWith('j1', false, expect.any(AbortSignal));
     expect(localStorage.getItem(STORAGE_KEY)).toBe('j1');
   });
 
@@ -396,5 +396,45 @@ describe('useJob', () => {
     // An aborted upload is not an upload failure — do not cry error at the operator.
     expect(result.current.state.status).toBe('idle');
     expect(result.current.state.error).toBeNull();
+  });
+
+  it('cancel during the start round-trip aborts POST /jobs and does not start', async () => {
+    // The narrowest window in the whole flow: the uploads are done and POST /jobs
+    // is on the wire. A Cancel here must abort that request — and, whatever the
+    // server does with it, must not leave the app in a started state. (The server
+    // refuses the late start with a 409; this is the client's half of the fix.)
+    vi.spyOn(api, 'getJob').mockResolvedValue(job());
+    let seen: AbortSignal | undefined;
+    vi.spyOn(api, 'startJob').mockImplementation(
+      (_jobId, _ai, signal) =>
+        new Promise<{ jobId: string }>((_resolve, reject) => {
+          seen = signal;
+          // fetch rejects an aborted request; api.startJob must behave the same.
+          signal?.addEventListener('abort', () => reject(new DOMException('', 'AbortError')));
+        }),
+    );
+    const { result } = renderHook(() => useJob());
+
+    let submitted!: Promise<void>;
+    await act(async () => {
+      submitted = result.current.submit(files, false);
+      // Let createUploads and both uploads settle, so submit() is parked inside
+      // startJob — exactly the racing window the server guard exists for.
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(api.startJob).toHaveBeenCalledWith('j1', false, expect.any(AbortSignal));
+    expect(seen?.aborted).toBe(false);
+
+    await act(async () => { await result.current.cancel(); });
+    await act(async () => { await submitted; });
+
+    // The request was actually aborted, not merely ignored.
+    expect(seen?.aborted).toBe(true);
+    // And the app never lands in a started state: no polling, no job id, no error.
+    expect(result.current.state.status).toBe('idle');
+    expect(result.current.state.jobId).toBeNull();
+    expect(result.current.state.error).toBeNull();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 });

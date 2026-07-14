@@ -13,6 +13,11 @@ import {
  */
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
+/**
+ * `init.signal` is honoured: fetch aborts the in-flight request and this rejects
+ * with an AbortError. Used by startJob so a Cancel during the submit round-trip
+ * actually stops the request rather than merely ignoring its answer.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Content-Type ONLY when there is a body to describe. On a bodyless GET it is a
   // lie about the request and, worse, it makes the request non-simple: against a
@@ -51,8 +56,22 @@ export function createUploads(filenames: string[]): Promise<UploadsResponse> {
   });
 }
 
-export function startJob(jobId: string, ai: boolean): Promise<{ jobId: string }> {
-  return request('/jobs', { method: 'POST', body: JSON.stringify({ jobId, ai }) });
+/**
+ * Start the pipeline for an already-uploaded job.
+ *
+ * `signal` aborts the request itself, so a Cancel that lands while this is in
+ * flight stops the bytes rather than merely discarding the answer. It is belt
+ * and braces, not the fix: the abort cannot un-send a request the server has
+ * already received, so the server refuses to start a job whose record is
+ * already terminal (409). Both halves are needed — this one keeps the common
+ * case cheap, the server one makes it correct.
+ */
+export function startJob(
+  jobId: string,
+  ai: boolean,
+  signal?: AbortSignal,
+): Promise<{ jobId: string }> {
+  return request('/jobs', { method: 'POST', body: JSON.stringify({ jobId, ai }), signal });
 }
 
 export function getJob(jobId: string): Promise<Job> {
