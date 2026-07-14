@@ -1,10 +1,10 @@
 # STIG Compliance Parser — Codebase Index
 
-Complete catalogue of every module, function, class, route, template section, CSS rule, test, and configuration artefact in the project.
+Complete catalogue of every module, class, function, route, template section, CSS rule, test, and configuration artefact in the project.
 
 **Repo root:** `G:\AI Apps\STIG Condenser\stig-parser`
-**Language:** Python 3.11+ · **Web framework:** Flask 3 · **XML:** lxml · **Excel:** openpyxl
-**Test count:** 146 passing
+**Language:** Python 3.11+ · **Web framework:** Flask 3 · **XML:** lxml · **Excel:** openpyxl · **Cloud:** boto3 (S3 / DynamoDB boundaries)
+**Test count:** 234 test functions across 20 files
 
 ---
 
@@ -12,677 +12,465 @@ Complete catalogue of every module, function, class, route, template section, CS
 
 ```
 stig-parser/
-├── .github/workflows/ci.yml        GitHub Actions test matrix
+├── .github/workflows/ci.yml        GitHub Actions test matrix (3.11 / 3.12)
 ├── .gitattributes / .gitignore
 ├── CODEBASE_INDEX.md               This file
+├── RESIDUALS.md                    Residual-risk / known-limitations notes
 ├── Dockerfile                      Container build
 ├── docker-compose.yml              Service orchestration
 ├── LICENSE                         MIT
 ├── pyproject.toml                  Package metadata + deps
 ├── README.md                       User-facing documentation
+├── docs/superpowers/
+│   ├── plans/2026-07-07-backend-async-rearchitecture.md
+│   └── specs/2026-07-07-govcloud-replatform-design.md
 ├── app/                            Application source (one Python package)
 │   ├── __init__.py                 Empty package marker
-│   ├── cli.py                      CLI entry point
-│   ├── web.py                      Flask app factory + background jobs
-│   ├── exporters/                  Output generators
+│   ├── cli.py                      CLI entry point → app.core.pipeline
+│   ├── web.py                      Flask app factory + threaded jobs
+│   ├── core/                       AWS-agnostic pipeline + storage boundaries
+│   │   ├── __init__.py
+│   │   ├── pipeline.py             Single source of truth: parse→match→filter→export
+│   │   ├── stages.py               Async stage entrypoints (future Lambda handlers)
+│   │   ├── artifact_store.py       Blob boundary: Local + S3 implementations
+│   │   ├── job_store.py            Job-status boundary: Memory + Dynamo implementations
+│   │   └── findings_io.py          Finding ↔ JSON serialization
+│   ├── exporters/
 │   │   ├── __init__.py
 │   │   └── excel_exporter.py       Two-sheet Excel workbook
-│   ├── parsers/                    XML ingestion
+│   ├── parsers/                    File ingestion
 │   │   ├── __init__.py
 │   │   ├── base.py                 Abstract parser + dataclasses
-│   │   ├── benchmark_parser.py     STIG benchmark definitions (XCCDF 1.1/1.2)
-│   │   ├── oval_parser.py          Stub — raises NotImplementedError
-│   │   └── xccdf_parser.py         Scan result files (4 scanner formats)
-│   ├── processors/                 Business logic
+│   │   ├── benchmark_parser.py     STIG benchmark defs (XCCDF 1.1/1.2)
+│   │   ├── xccdf_parser.py         XCCDF scan results (SCC/OpenSCAP/…)
+│   │   ├── cklb_parser.py          CKLB JSON checklists (Evaluate-STIG / STIG Viewer 3)
+│   │   ├── nessus_parser.py        Tenable .nessus compliance scans
+│   │   └── oval_parser.py          Stub — raises NotImplementedError
+│   ├── processors/
 │   │   ├── __init__.py
 │   │   ├── filter.py               Discard non-actionable findings
 │   │   └── matcher.py              Cross-reference results ↔ benchmarks
-│   ├── static/style.css            Single CSS stylesheet (no framework)
+│   ├── static/
+│   │   ├── style.css               Single CSS stylesheet (no framework)
+│   │   ├── favicon.svg
+│   │   └── fonts/                  Public Sans (self-hosted, SIL OFL)
+│   │       ├── OFL.txt
+│   │       ├── PublicSans-Regular.woff2
+│   │       ├── PublicSans-SemiBold.woff2
+│   │       └── PublicSans-Bold.woff2
 │   ├── templates/index.html        Single Flask template + inline JS
-│   └── utils/                      Cross-cutting helpers
+│   └── utils/
 │       ├── __init__.py
 │       ├── scanner_detect.py       Auto-identify SCC / OpenSCAP / Nessus / Evaluate-STIG
 │       └── zip_extract.py          Unwrap DISA STIG ZIP archives
-└── tests/                          pytest suite — 146 tests
+└── tests/                          pytest suite — 234 test functions
     ├── __init__.py
-    ├── fixtures/                   Fabricated XCCDF samples
+    ├── fixtures/                   Fabricated XCCDF / CKLB / .nessus samples
     │   ├── evaluate_stig_results.xml
     │   ├── nessus_results.xml
     │   ├── openscap_results.xml
     │   ├── sample_benchmark.xml
     │   └── scc_results.xml
-    ├── test_benchmark_parser.py    19 tests
-    ├── test_cli.py                 16 tests
-    ├── test_excel_exporter.py      11 tests
-    ├── test_filter.py              7 tests
-    ├── test_matcher.py             19 tests
-    ├── test_oval_parser.py         1 test
-    ├── test_web.py                 9 tests
-    ├── test_xccdf_parser.py        51 tests
-    └── test_zip_extract.py         13 tests
+    ├── test_artifact_store_local.py    5
+    ├── test_artifact_store_s3.py       4  (moto-mocked)
+    ├── test_benchmark_parser.py        22
+    ├── test_cklb_parser.py             17
+    ├── test_cli.py                     15
+    ├── test_core_import.py             3
+    ├── test_excel_exporter.py          13
+    ├── test_filter.py                  7
+    ├── test_findings_io.py             4
+    ├── test_job_store_dynamo.py        4  (moto-mocked)
+    ├── test_job_store_memory.py        5
+    ├── test_matcher.py                 23
+    ├── test_nessus_parser.py           16
+    ├── test_oval_parser.py             1
+    ├── test_parser_hardening.py        11
+    ├── test_pipeline.py                7
+    ├── test_stages.py                  5
+    ├── test_web.py                     17
+    ├── test_xccdf_parser.py            44
+    └── test_zip_extract.py             11
 ```
 
 ---
 
 ## 2. Data Models (`app/parsers/base.py`)
 
-Defined as `@dataclass` types. All field types are `str` unless noted.
+All `@dataclass`. Field types are `str` unless noted.
 
 | Class | Field | Type | Notes |
 |---|---|---|---|
-| `RuleResult` | `rule_id` | str | Full XCCDF rule id (`xccdf_mil.disa.stig_rule_SV-…_rule`) |
-| | `status` | str | Raw XCCDF value: `fail`, `pass`, `notchecked`, `error`, `unknown`, `notselected`, `notapplicable`, etc. |
-| `ScanResult` | `source_file` | str | Filename of source XCCDF (used for hostname fallback) |
+| `RuleResult` | `rule_id` | str | Full XCCDF rule id |
+| | `status` | str | Raw XCCDF value: `fail`, `pass`, `notchecked`, `error`, `unknown`, `notselected`, `notapplicable`, … |
+| `ScanResult` | `source_file` | str | Filename (stem used as hostname fallback) |
 | | `hostname` | str | Target hostname |
 | | `ip_address` | str | Target IP — `"N/A"` if unresolvable |
-| | `benchmark_href` | str | `href` attribute from `<benchmark>` element |
-| | `benchmark_id` | str | `id` attribute from `<benchmark>` element |
-| | `scanner` | str | `SCC` / `OpenSCAP` / `Nessus` / `Evaluate-STIG` / `Unknown` |
-| | `rule_results` | `list[RuleResult]` | All rule results in the file |
+| | `benchmark_href` | str | `href` from `<benchmark>` element |
+| | `benchmark_id` | str | `id` from `<benchmark>` element |
+| | `scanner` | str | Detected scanner name |
+| | `rule_results` | `list[RuleResult]` | default `[]` |
 | `BenchmarkRule` | `vuln_id` | str | V-number (e.g. `V-254239`) |
 | | `rule_id` | str | Full XCCDF rule id |
 | | `severity` | str | `CAT I` / `CAT II` / `CAT III` |
-| | `check_text` | str | Body of `<check-content>` (may be empty for SCAP-style files) |
-| | `fix_text` | str | Body of `<fixtext>` |
-| `Benchmark` | `benchmark_id` | str | Root `<Benchmark>` `id` attribute |
+| | `check_text` / `fix_text` | str | May be empty for SCAP-style files |
+| `Benchmark` | `benchmark_id` | str | Root `<Benchmark>` `id` |
 | | `title` | str | Benchmark title |
-| | `rules` | `dict[str, BenchmarkRule]` | Keyed by full rule id |
-| `Finding` | `stig_title` | str | From parent `Benchmark.title` |
-| | `vuln_id` | str | From `BenchmarkRule.vuln_id` (blank if unmatched) |
-| | `rule_id` | str | From `RuleResult.rule_id` |
-| | `severity` | str | CAT I/II/III |
-| | `status` | str | `Open` / `Not Reviewed` / `Error` / `Unknown` |
-| | `server` | str | From `ScanResult.hostname` |
-| | `ip_address` | str | From `ScanResult.ip_address` |
-| | `check_text` / `fix_text` | str | From benchmark; blank if unmatched |
-| `BaseParser` | — | abstract | Abstract method `parse(self, path) -> Any` |
+| | `rules` | `dict[str, BenchmarkRule]` | keyed by rule_id, default `{}` |
+| `Finding` | `stig_title` | str | Report row — the common currency all parsers emit |
+| | `vuln_id` / `rule_id` / `severity` / `status` | str | |
+| | `server` / `ip_address` | str | |
+| | `check_text` / `fix_text` | str | |
+| `BaseParser` | — | ABC | abstract `parse(self, path) -> Any` |
+
+**`Finding` is the pipeline's common output type.** XCCDF results become `ScanResult` then get matched into `Finding`s; CKLB and .nessus parsers emit `Finding`s directly (self-contained formats).
 
 ---
 
 ## 3. Parsers (`app/parsers/`)
 
-### 3.1 `xccdf_parser.py` — Scan result ingestion
+All XML parsers share a per-call `_safe_xml_parse` hardened against XXE / SSRF / billion-laughs (`resolve_entities=False`, `no_network=True`, `load_dtd=False`).
 
-**Class:** `XCCDFResultsParser(BaseParser)`
+### 3.1 `xccdf_parser.py` — XCCDF scan results
 
-**Public method:**
-| Method | Returns | Description |
+**Class:** `XCCDFResultsParser(BaseParser)` → `parse(path) -> ScanResult | None`
+
+| Helper | Returns | Description |
 |---|---|---|
-| `parse(path)` | `ScanResult \| None` | Parse XCCDF results file. Returns `None` on XML syntax error. |
+| `_find_test_result(root, file_name)` | Element | Locate `<TestResult>` (root or nested); **uses the LAST of multiple** (OpenSCAP post-remediation state), warns |
+| `_find_fact(root, urns)` | str | `<fact>` text by URN, preference order |
+| `_find_text(root, *local_names)` | str | Direct-child text, namespace-agnostic |
+| `_findall_results(root)` | list | All `<rule-result>` children |
+| `_find_child_text(el, local)` | str | Direct child text by local name |
+| `_get_benchmark_attrs(root)` | (str, str) | `(href, id)` from `<benchmark>` |
 
-**Module-private helpers:**
-| Function | Returns | Description |
-|---|---|---|
-| `_find_test_result(root)` | `Element` | Locate `<TestResult>` whether it is the root or nested inside `<Benchmark>` |
-| `_find_fact(root, urns)` | str | Look up `<fact>` text within `<target-facts>` by URN, in preference order |
-| `_find_text(root, *local_names)` | str | Find direct-child text by local name (namespace-agnostic) |
-| `_findall_results(root)` | `list[Element]` | All `<rule-result>` children regardless of prefix |
-| `_find_child_text(el, local_name)` | str | Direct child text by local name |
-| `_get_benchmark_attrs(root)` | `tuple[str, str]` | `(href, id)` from `<benchmark>` element |
+Constants: `_NS_XCCDF_12`, `_XCCDF_NS`, `_FACT_HOSTNAME_URNS` (host_name, fqdn), `_FACT_IP_URNS` (ipv4, ipv6).
+**Hostname order:** `<target>` → target-facts host_name/fqdn → `<title>` → filename stem.
+**IP order:** target-facts ipv4/ipv6 → `<target-address>` → `"N/A"`.
+**Rejects legacy `.ckl`** (root `<CHECKLIST>`) with a warning pointing to the CKLB route.
 
-**Constants:**
-- `_NS_XCCDF_12 = "http://checklists.nist.gov/xccdf/1.2"`
-- `_XCCDF_NS = {"cdf": _NS_XCCDF_12}`
-- `_FACT_HOSTNAME_URNS` — `[host_name, fqdn]` preference order
-- `_FACT_IP_URNS` — `[ipv4, ipv6]` preference order
+### 3.2 `benchmark_parser.py` — STIG definitions (XCCDF 1.1 *and* 1.2)
 
-**Hostname resolution order:** `<target>` → `<target-facts>` host_name/fqdn → `<title>` → filename stem
-**IP resolution order:** `<target-facts>` ipv4/ipv6 → `<target-address>` → `"N/A"`
+**Class:** `BenchmarkParser(BaseParser)` → `parse(path) -> Benchmark | None`
 
-### 3.2 `benchmark_parser.py` — STIG definition ingestion
+| Helper | Description |
+|---|---|
+| `_findall_local(el, local)` | Direct children by local name |
+| `_extract_vuln_id(raw_id)` | Strip `…_group_` prefix from XCCDF 1.2 ids |
+| `_find_text_ns(el, local)` | Direct-child text with namespace fallback |
+| `_get_check_text(rule_el)` | Text from `<check><check-content>` |
+| `_get_fix_text(rule_el)` | Text from `<fixtext>` |
 
-**Class:** `BenchmarkParser(BaseParser)` — handles both XCCDF 1.1 *and* 1.2
+Constants: `_NS_XCCDF_11`, `_NS_XCCDF_12`, `_SEVERITY_MAP` (`high→CAT I`, `medium→CAT II`, `low→CAT III`; else `Unknown`).
 
-**Public method:**
-| Method | Returns | Description |
-|---|---|---|
-| `parse(path)` | `Benchmark \| None` | Parse benchmark XML; returns `None` on syntax error |
+### 3.3 `cklb_parser.py` — CKLB JSON checklists (self-contained → emits `Finding`s)
 
-**Module-private helpers:**
-| Function | Returns | Description |
-|---|---|---|
-| `_findall_local(el, local_name)` | `list[Element]` | Direct children by local name (namespace-agnostic) |
-| `_extract_vuln_id(raw_id)` | str | Strips `xccdf_mil.disa.stig_group_` prefix from XCCDF 1.2 ids |
-| `_find_text_ns(el, local_name)` | str | Direct-child text with namespace fallback |
-| `_get_check_text(rule_el)` | str | Text from `<check><check-content>` |
-| `_get_fix_text(rule_el)` | str | Text from `<fixtext>` |
+**Class:** `CKLBParser(BaseParser)` → `parse(path) -> list[Finding] | None`
+Reads UTF-8-BOM-tolerant JSON; requires a `stigs` array; per-host `target_data`.
+Helper `_effective_severity(rule)` honours STIG Viewer severity overrides.
+Constants: `_SEVERITY_MAP`, `_STATUS_MAP` (`open→Open`, `not_reviewed→Not Reviewed`, `not_a_finding→Not A Finding`, `not_applicable→Not Applicable`, `error→Error`). Unrecognised status → `Unknown` (never silently dropped).
 
-**Constants:**
-- `_NS_XCCDF_11 = "http://checklists.nist.gov/xccdf/1.1"`
-- `_NS_XCCDF_12 = "http://checklists.nist.gov/xccdf/1.2"`
-- `_SEVERITY_MAP = {"high": "CAT I", "medium": "CAT II", "low": "CAT III"}`
+### 3.4 `nessus_parser.py` — Tenable .nessus compliance scans (self-contained → emits `Finding`s)
 
-### 3.3 `oval_parser.py` — Stub for future work
+**Class:** `NessusComplianceParser(BaseParser)` → `parse(path) -> list[Finding] | None`
+Requires root `<NessusClientData_v2>`; reads `ReportItem[pluginFamily="Policy Compliance"]` with `cm:`-namespaced children.
 
-**Class:** `OVALParser(BaseParser)` — `parse()` raises `NotImplementedError`. Listed in README roadmap.
+| Helper | Description |
+|---|---|
+| `_safe_xml_parse(path)` | hardened lxml parse (`huge_tree=True` — real scans run to several MB) |
+| `_parse_reference_tokens(ref)` | Parse `KEY\|value,…` from `cm:compliance-reference`; first key wins |
+| `_host_metadata(report_host)` | `(hostname, ip)` from `<HostProperties>` |
+
+Constants: `_CM_NS`/`_CM`, `_RESULT_MAP` (`FAILED→Open`, `PASSED→Not A Finding`, `WARNING→Not Reviewed`, `ERROR→Error`), `_CAT_MAP` (I/II/III). STIG cross-refs (Vuln-ID / Rule-ID / STIG-ID / CAT) pulled from `cm:compliance-reference`; check text appends observed `compliance-actual-value` as evidence.
+
+### 3.5 `oval_parser.py` — stub
+
+**Class:** `OVALParser(BaseParser)` — `parse()` raises `NotImplementedError`. On the README roadmap.
 
 ---
 
 ## 4. Processors (`app/processors/`)
 
-### 4.1 `matcher.py` — Cross-reference
+### 4.1 `matcher.py`
+`match_results_to_benchmarks(scan_results, benchmarks) -> list[Finding]` — joins each `RuleResult` to its `BenchmarkRule` via parent benchmark; emits only actionable statuses; warns on unmatched benchmarks and unmatched rule ids.
+Helpers: `_normalize_id(raw)` (Path.stem.lower, hrefs only), `_find_benchmark(href, bid, benchmarks)` — 3-tier match (exact id → href stem → substring).
+Constants: `_STATUS_MAP` (`fail→Open`, `notchecked/notselected→Not Reviewed`, `error→Error`, `unknown→Unknown`), `_KEEP_STATUSES`.
 
-**Public function:**
-| Function | Returns | Description |
-|---|---|---|
-| `match_results_to_benchmarks(scan_results, benchmarks)` | `list[Finding]` | Joins each `RuleResult` to its `BenchmarkRule` via parent benchmark match; emits only actionable statuses |
-
-**Module-private helpers:**
-| Function | Returns | Description |
-|---|---|---|
-| `_normalize_id(raw)` | str | `Path(raw).stem.strip().lower()` — used only on hrefs |
-| `_find_benchmark(href, bid, benchmarks)` | `Benchmark \| None` | 3-tier match: exact id → href stem → substring |
-
-**Constants:**
-- `_STATUS_MAP` — XCCDF → display: `fail→Open`, `notchecked→Not Reviewed`, `notselected→Not Reviewed`, `error→Error`, `unknown→Unknown`
-- `_KEEP_STATUSES` — frozenset of `_STATUS_MAP` keys (actionable statuses)
-
-### 4.2 `filter.py` — Defensive re-filter
-
-**Public function:** `filter_findings(findings) -> list[Finding]` — keep only `Open` / `Not Reviewed` / `Error` / `Unknown`.
+### 4.2 `filter.py`
+`filter_findings(findings) -> list[Finding]` — defensive keep of `Open` / `Not Reviewed` / `Error` / `Unknown` (`_KEEP_STATUSES`).
 
 ---
 
-## 5. Exporters (`app/exporters/`)
+## 5. Core Pipeline & Boundaries (`app/core/`)
 
-### 5.1 `excel_exporter.py`
+AWS-agnostic. `pipeline.py`, `stages.py`, and `findings_io.py` must not import boto3; only `S3ArtifactStore` / `DynamoJobStore` may.
 
-**Class:** `ExcelExporter`
-
-**Public method:**
-| Method | Returns | Raises |
+### 5.1 `pipeline.py` — single source of truth
+| Symbol | Kind | Description |
 |---|---|---|
-| `export(findings, output_path)` | `Path` | `ValueError` if findings list empty |
+| `PipelineError` | Exception | User-safe message for UI / CLI |
+| `ParseResult` | dataclass | `findings`, `warnings`, `source_file_count` |
+| `parse_stage(results_paths, benchmark_paths, extract_dir, *, cancel_check=None)` | fn | Routes `.cklb`/`.nessus` to self-contained parsers (`_SELF_CONTAINED`), rest through XCCDF; expands ZIPs; matches + filters; raises `PipelineError` when no actionable findings, with a diagnostic message |
+| `compute_summary(findings, source_file_count)` | fn | `{files, hosts, findings, cat1, cat2, cat3}` |
+| `export_stage(findings, output_path)` | fn | Delegates to `ExcelExporter` |
+| `default_output_name()` | fn | `stig_findings_<UTC timestamp>.xlsx` |
 
-**Private methods:**
-| Method | Description |
-|---|---|
-| `_write_findings(ws, findings)` | Build Findings sheet — header row, data rows, severity colouring, freeze panes, auto-filter, column widths |
-| `_write_summary(ws, findings)` | Build Summary sheet — three COUNTIFS tables + footer note |
+Optional benchmarks: when none supplied, XCCDF result files feed both sides (SCC self-contained); CKLB/.nessus never need benchmarks.
 
-**Module-private utilities:**
-| Function | Description |
-|---|---|
-| `_unique_pairs(findings, attr1, attr2)` | Order-preserving deduplication on a two-attribute key |
-| `_unique_values(findings, attr)` | Order-preserving deduplication on a single attribute |
+### 5.2 `stages.py` — async stage entrypoints (future Lambda)
+`run_parse_stage(job_id, input_filenames, store, jobs, *, work_dir) -> bool` and `run_export_stage(job_id, store, jobs, *, work_dir) -> bool` — take an `ArtifactStore` + `JobStore`, never raise (errors captured into job record), pass findings between stages as `findings.json`. `_is_safe_name(name)` rejects path-traversal filenames. Keys: `INPUT_PREFIX`, `FINDINGS_KEY`, `REPORT_KEY`.
 
-**Findings sheet columns** (`_FINDINGS_COLS`):
-| # | Header | Source attr | Max width |
-|---|---|---|---|
-| A | STIG Title | `stig_title` | 50 |
-| B | Vuln ID | `vuln_id` | 12 |
-| C | Rule ID | `rule_id` | 40 |
-| D | Severity | `severity` | 10 |
-| E | Status | `status` | 14 |
-| F | Server | `server` | 30 |
-| G | IP Address | `ip_address` | 18 |
-| H | Check Text | `check_text` | 80 |
-| I | Fix Text | `fix_text` | 80 |
+### 5.3 `artifact_store.py` — blob boundary
+`ArtifactStore` Protocol (`put_bytes`/`get_bytes`/`exists`/`upload_from`/`download_to`/`presign_get`/`presign_put`).
+- `LocalArtifactStore(root)` — filesystem; `_resolve` rejects keys escaping root; presign returns `file://` URI.
+- `S3ArtifactStore(bucket, region, client=None)` — the only boto3-touching blob member; real presigned URLs.
 
-**Severity fills:** CAT I = `#FFCCCC` (light red); CAT II = `#FFEB9C` (amber); CAT III = `#C6EFCE` (light green).
-**Wrap-text columns:** Check Text, Fix Text.
-**Freeze panes:** `A2`. **Auto-filter:** `A1:I1`.
+### 5.4 `job_store.py` — job-status boundary
+`JobStore` Protocol (`create`/`update`/`get`/`delete`).
+- `MemoryJobStore` — thread-safe dict; backs Flask / CLI / tests.
+- `DynamoJobStore(table_name, region, client=None)` — single item per `job_id`, fields JSON-encoded into a `data` attribute; **non-atomic read-modify-write** (docstring notes single-writer-per-job requirement).
 
-**Summary sheet tables:**
-1. *Findings by Severity* — columns: Severity, Open, Not Reviewed, Error, Unknown, Total
-2. *Findings by Server* — columns: Server, IP, CAT I, CAT II, CAT III, Total
-3. *Findings by STIG* — columns: STIG Title, CAT I, CAT II, CAT III, Total
-4. Footer note (merged A:F) — italic grey "auto-filter doesn't update counts" disclaimer
+### 5.5 `findings_io.py`
+`findings_to_json(findings) -> str` / `findings_from_json(data) -> list[Finding]` — `asdict`-based; unknown keys ignored for forward/backward compatibility.
 
 ---
 
-## 6. Utils (`app/utils/`)
+## 6. Exporters (`app/exporters/excel_exporter.py`)
 
-### 6.1 `scanner_detect.py`
+**Class:** `ExcelExporter.export(findings, output_path) -> Path` — raises `ValueError` on empty list. Builds `Findings` + `Summary` sheets.
+- `_write_findings(ws, findings)` — header row, data rows, severity fill, freeze `A2`, auto-filter `A1:I1`, measured column widths.
+- `_write_summary(ws, findings)` — three COUNTIFS tables + italic footer note.
+- Module utils: `_unique_pairs`, `_unique_values` (order-preserving dedup).
+- **CSV-injection defense:** `_sanitize_cell` prefixes `'` to any value starting with `= + - @ | \t \r` (`_FORMULA_PREFIXES`) — scan text is attacker-controllable.
 
-**Public function:**
-| Function | Returns | Description |
-|---|---|---|
-| `detect_scanner(path)` | str | One of `SCC` / `OpenSCAP` / `Nessus` / `Evaluate-STIG` / `Unknown` |
-
-**Private helpers:**
-| Function | Description |
-|---|---|
-| `_collect_namespaces(element)` | Every namespace URI used anywhere in the document |
-| `_extract_generator_text(root)` | Concatenated text from `generator` / `product` / `scanner-version` / `creator` elements |
-
-**Detection precedence:**
-1. Nessus namespaces (`http://www.nessus.org/cm`, `http://www.nessus.org`)
-2. SCAP source namespace (`http://scap.nist.gov/schema/scap/source/1.2`) → SCC
-3. `test-system="cpe:/a:niwc:scc:…"` on `<TestResult>` → SCC *(added when working with real SCC files)*
-4. Generator text substring match against `Evaluate-STIG` / `Nessus` / `OpenSCAP` / `SCC`
-5. Root `id` contains `evaluate-stig` → Evaluate-STIG
-
-### 6.2 `zip_extract.py`
-
-**Public functions:**
-| Function | Returns | Description |
-|---|---|---|
-| `extract_xccdf_from_zip(zip_path, dest_dir)` | `list[Path]` | Pull every `*xccdf.xml` out of a DISA STIG ZIP; recurses one level into nested ZIPs |
-| `expand_benchmark_paths(paths, extract_dir)` | `tuple[list[Path], list[str]]` | Replace `.zip` entries with extracted XCCDF files; returns `(resolved_paths, warnings)` |
-
-**Private helper:** `_unique_path(path)` — appends numeric suffix on filename collision.
-
-**Constant:** `_XCCDF_SUFFIX = "xccdf.xml"` (case-insensitive match).
+**Findings columns (`_FINDINGS_COLS`):** A STIG Title(50) · B Vuln ID(12) · C Rule ID(40) · D Severity(10) · E Status(14) · F Server(30) · G IP Address(18) · H Check Text(80, wrap) · I Fix Text(80, wrap).
+**Severity fills:** CAT I `#FFCCCC` · CAT II `#FFEB9C` · CAT III `#C6EFCE`. Fonts: Arial 10 (bold header).
+**Summary tables:** By Severity (Severity × statuses) · By Server (Server, IP × CAT I/II/III) · By STIG (Title × CAT I/II/III), each with a SUM total; footer disclaims that filtering doesn't update COUNTIFS.
 
 ---
 
-## 7. Web Application (`app/web.py`)
+## 7. Utils (`app/utils/`)
 
-### 7.1 App factory
+### 7.1 `scanner_detect.py`
+`detect_scanner(path) -> str` → `SCC` / `OpenSCAP` / `Nessus` / `Evaluate-STIG` / `Unknown`.
+Precedence: Nessus namespaces → SCAP source namespace (SCC) → `test-system="…scc…"` on `<TestResult>` → generator-text signature match → root `id` contains `evaluate-stig`.
+Helpers: `_collect_namespaces`, `_extract_generator_text`. Constants: `_SCANNER_SIGNATURES`, `_NAMESPACE_HINTS`, `_SCC_NAMESPACE`.
 
-`create_app(secret_key=None) -> Flask` — configures Flask, registers routes, runs orphan-job sweep on startup.
+### 7.2 `zip_extract.py`
+`extract_xccdf_from_zip(zip_path, dest_dir, _depth=0) -> list[Path]` — pulls every `*xccdf.xml`; recurses into nested ZIPs (wrapper pattern).
+`expand_benchmark_paths(paths, extract_dir) -> (list[Path], list[str])` — replaces `.zip` entries with extracted XMLs; returns warnings for ZIPs with no XCCDF.
+**Zip-bomb defenses:** `_bounded_extract` streams with a 500 MB decompressed cap (`_MAX_EXTRACTED_BYTES`); `_MAX_ZIP_DEPTH=2` recursion limit. Helper `_unique_path` on collision. Constant `_XCCDF_SUFFIX="xccdf.xml"`.
 
-### 7.2 HTTP routes
+---
 
+## 8. Web Application (`app/web.py`)
+
+### 8.1 Factory
+`create_app(secret_key=None) -> Flask` — sets secret (env `FLASK_SECRET_KEY`, else ephemeral + warning), `MAX_CONTENT_LENGTH = 500 MB`, sweeps orphaned jobs on startup.
+
+### 8.2 HTTP routes
 | Method | Path | Handler | Returns |
 |---|---|---|---|
-| `GET` | `/` | `index()` | Renders `index.html` with `existing_job_id` from session |
-| `POST` | `/api/process` | `process()` | `{job_id, status}` 200 · `{error}` 400 |
-| `GET` | `/api/status/<job_id>` | `job_status()` | `{status, progress, warnings, error}` 200 · `{error}` 404 |
-| `GET` | `/api/download/<job_id>` | `download()` | `.xlsx` attachment 200; deletes job dir on response close |
+| GET | `/` | `index()` | Renders `index.html` with `existing_job_id` from session |
+| GET | `/readme` | `readme()` | `README.md` as `text/plain`; 404 if not bundled |
+| POST | `/api/process` | `process()` | `{job_id, status}` 200 · `{error}` 400 · `{error}` 429 (rate-limited) |
+| GET | `/api/status/<job_id>` | `job_status()` | `{status, progress, warnings, error, summary}`; 404 unless session owns the job |
+| POST | `/api/cancel/<job_id>` | `cancel()` | `{status: "cancelling"}`; sets `cancelled` flag |
+| GET | `/api/download/<job_id>` | `download()` | `.xlsx` attachment; deletes job dir on response close; 400 unless complete |
 
-### 7.3 Background processing
+**Ownership check:** status/cancel/download all require `session["job_id"] == job_id` (404 otherwise) — a client can only touch its own job.
 
-| Function | Description |
-|---|---|
-| `_run_job(job_id, results_paths, benchmark_paths)` | Threaded pipeline — extracts ZIPs, parses both sides, matches, filters, exports |
-| `_set_job(job_id, **fields)` | Thread-safe update of in-memory `_jobs` dict |
-| `_get_job(job_id)` | Thread-safe shallow-copy read |
-| `_delete_job(job_id)` | Remove temp dir + job entry |
-| `_sweep_orphaned_jobs()` | Startup cleanup of dirs older than 8 hours |
-| `_job_dir(job_id)` | `_TEMP_DIR / job_id` |
+### 8.3 Rate limiting
+`_rate_limited(client_ip)` — in-process sliding window, `_RATE_MAX=10` per `_RATE_WINDOW=60s`, per IP (`_rate_hits`). Caps unauthenticated job spam; not a WAF replacement.
 
-### 7.4 Logging integration
+### 8.4 Background processing
+`_run_job(job_id, results_paths, benchmark_paths)` — threaded: `parse_stage` (with cancel check) → `export_stage` → `compute_summary`; catches `PipelineError` (user-safe) vs generic `Exception` (logs traceback, returns "see server logs").
+Cancellation: `_JobCancelled` exception + `_raise_if_cancelled(job_id)`; cancelled jobs drop files but keep the status entry.
+State helpers: `_set_job`, `_get_job`, `_job_dir`. Log capture: `_WarningCollector(logging.Handler)` funnels WARNING+ from `app.*` into the job's `warnings`.
 
-**Class:** `_WarningCollector(logging.Handler)` — captures WARNING+ log records into a job's `warnings` list so they can be surfaced through `/api/status`.
-
-### 7.5 Module-level state
-
-| Name | Type | Purpose |
-|---|---|---|
-| `_jobs` | `dict[str, dict]` | UUID → job state |
-| `_jobs_lock` | `threading.Lock` | Guards `_jobs` |
-| `_TEMP_DIR` | `Path` | `$STIG_TEMP_DIR` or `<repo>/tmp` |
-| `_ORPHAN_MAX_AGE_HOURS` | int | `8` |
-
-### 7.6 Behaviour notes
-
-- Benchmark upload is **optional** — when omitted, results files are used for both scan and benchmark parsing (SCC self-contained format).
-- Max upload size: 500 MB (`MAX_CONTENT_LENGTH`).
-- Session cookie stores `job_id` to allow page-reload reconnection.
+### 8.5 Module state & cleanup
+`_jobs` / `_jobs_lock`, `_TEMP_DIR` (`$STIG_TEMP_DIR` or `<repo>/tmp`), `_ORPHAN_MAX_AGE_HOURS=8`. `_delete_job`, `_sweep_orphaned_jobs` (startup dir sweep).
 
 ---
 
-## 8. CLI (`app/cli.py`)
+## 9. CLI (`app/cli.py`)
 
-### 8.1 Entry point
-
-`main(argv=None) -> int` — exits 0 on success, 1 on error.
-
-### 8.2 Arguments
-
-| Flag | Required | Description |
-|---|---|---|
-| `--results` | yes | Files/directories/globs for XCCDF results |
-| `--benchmarks` | no | Files/dirs/globs for benchmark XMLs/ZIPs; *optional for SCC* |
-| `--output` | no | Output `.xlsx` path; default `stig_findings_<UTC timestamp>.xlsx` |
-| `--verbose` | no | DEBUG logging |
-
-### 8.3 Helpers
-
-| Function | Returns | Description |
-|---|---|---|
-| `_resolve_paths(args, extensions)` | `list[Path]` | Expands directories (by extension) and shell globs |
-| `_build_parser()` | `ArgumentParser` | Constructs the argparse spec |
-
-### 8.4 Console-script entry
-
-Declared in `pyproject.toml` as `stig-parser = "app.cli:main"`.
+`main(argv=None) -> int` — 0 success / 1 error. Routes through `app.core.pipeline`.
+Args: `--results` (required; `.xml`/`.cklb`/`.nessus`, dirs, globs) · `--benchmarks` (optional; `.xml`/`.zip`) · `--output` (default timestamped) · `--verbose`.
+Helpers: `_resolve_paths(args, extensions)` (dir/glob expansion), `_build_parser()`. Console script: `stig-parser = app.cli:main`.
 
 ---
 
-## 9. UI — Templates (`app/templates/`)
+## 10. UI — Template (`app/templates/index.html`)
 
-### 9.1 `index.html` — the single page
+Single-page app. Sections show/hide via the `hidden` attribute — **no true modals**.
 
-This is a **single-page application** with three top-level sections rendered conditionally via CSS `hidden`. **There are no true modals** — only inline sections that show/hide. Catalogue:
+| Section | Visible when | Contents |
+|---|---|---|
+| `<header>` | always | `h1` + `.subtitle` (notes SCC self-contained) |
+| `#app` `<main>` | always | wraps everything; `<noscript>` CLI fallback note |
+| `#upload-section` | initial / after reset | upload form |
+| `#progress-section` | job running | activity log, cancel, warnings |
+| `#result-section` | complete or error | success or error card |
+| `<footer>` | always | supported-scanner line + `/readme` link |
 
-| Section ID | Element | Visible When | Contents |
-|---|---|---|---|
-| `#app` | `<main>` | Always | Wraps all sections below |
-| `#upload-section` | `<section>` | Initial state · after Reset | Upload form |
-| `#progress-section` | `<section>` | While job is running | Progress bar + warnings panel |
-| `#result-section` | `<section>` | Job complete or error | Either `#result-success` or `#result-error` |
+**Upload section:** `<form id="upload-form">` › `.upload-grid` with two `.upload-zone`s:
+- `#results-zone` (required) — inline SVG icon, "Scan Results", accepts `.xml,.cklb,.nessus`; `#results-browse` button, hidden `#results-input`, `#results-zone-notice` (drop-reject `role=status`), `ul#results-file-list`.
+- `#benchmarks-zone` (optional) — `<h2>` with `.badge-optional` "Optional for SCC", accepts `.xml,.zip`; parallel browse/input/notice/list ids.
+- `.form-actions` › `#process-btn` (disabled until results selected).
 
-#### Page header (`<header>`)
-- `h1`: "STIG Compliance Parser"
-- `p.subtitle`: brief description noting SCC files are self-contained
+**Progress section:** `h2` "Processing" · `#activity-log` (`role=log`, `aria-live=polite`, timestamped lines) · `#stall-note` (revealed after ~20 silent polls) · `.progress-actions` › `#cancel-btn` · `#warnings-box` (lead + `ul#warnings-list`).
 
-#### Upload section (`#upload-section`)
-- `<form id="upload-form">` with `enctype="multipart/form-data"`
-- `.upload-grid` — 2-column responsive grid
-  - **`#results-zone` (`.upload-zone`)** — required
-    - Icon, "Scan Results" heading, helper text
-    - `label.btn.btn-secondary[for=results-input]`: Choose Files
-    - `input#results-input[type=file][name=results][multiple][accept=.xml]` (hidden)
-    - `ul#results-file-list.file-list`
-  - **`#benchmarks-zone` (`.upload-zone`)** — optional
-    - Icon, "STIG Benchmarks" heading + **`.badge-optional`** ("Optional for SCC")
-    - Helper text explaining SCC files don't need it
-    - `label.btn.btn-secondary[for=benchmarks-input]`: Choose Files
-    - `input#benchmarks-input[type=file][name=benchmarks][multiple][accept=.xml,.zip]` (hidden)
-    - `ul#benchmarks-file-list.file-list`
-- `.form-actions`
-  - `button#process-btn.btn.btn-primary[type=submit]` — disabled until results uploaded
+**Result section:**
+- `#result-success` (`role=status`) — drawn-check SVG, "Report Ready", `dl#report-summary` (`#sum-files`/`-hosts`/`-findings`/`-cat1`/`-cat2`/`-cat3`), `#summary-note` (zero-severity warning), `#download-link`, `#reset-btn`, `#success-warnings-box` + `#success-warnings-list`.
+- `#result-error` (`role=alert`) — ✕ SVG, "Processing Failed", `#error-message`, `#error-warnings-box` + `#error-warnings-list`, `#reset-btn-error`.
 
-#### Progress section (`#progress-section`, hidden by default)
-- `h2`: "Processing"
-- `.progress-bar-wrap` > `#progress-bar.progress-bar`
-- `#progress-text.progress-text`
-- `#warnings-box.warnings-box` (hidden until warnings arrive)
-  - `h3`: "Warnings"
-  - `ul#warnings-list`
+### 10.1 Inline JavaScript (IIFE)
+State: `pollTimer`, `currentJobId` (seeded from template var), `lastWarnings`, `lastSummary`, `pollFailures`, `lastProgressMsg`, `unchangedPolls`.
 
-#### Result section (`#result-section`, hidden by default)
-- **`#result-success.result-card.success`** (hidden until complete)
-  - `.result-icon` (checkmark)
-  - `h2`: "Report Ready"
-  - `a#download-link.btn.btn-primary`: "Download Excel Report"
-  - `button#reset-btn.btn.btn-secondary`: "Process Another Set"
-- **`#result-error.result-card.error`** (hidden until error)
-  - `.result-icon` (✗)
-  - `h2`: "Processing Failed"
-  - `p#error-message`
-  - `#error-warnings-box.warnings-box` (hidden when no warnings)
-    - `h3`: "Warnings"
-    - `ul#error-warnings-list`
-  - `button#reset-btn-error.btn.btn-secondary`: "Try Again"
-
-#### Footer (`<footer>`)
-- Supported-scanner list
-- `.small` disclaimer about Nessus / Evaluate-STIG being untested
-
-### 9.2 Inline JavaScript (IIFE inside `<script>`)
-
-All event handlers and DOM manipulation live in a single IIFE for namespace hygiene. No external JS dependencies.
-
-**State variables:**
-- `pollTimer` — `setInterval` handle for `/api/status` polling
-- `currentJobId` — UUID of active job (seeded from server-rendered template var)
-- `lastWarnings` — most recent warnings (for re-display on error)
-
-**Functions:**
 | Function | Purpose |
 |---|---|
-| `removeFileAt(input, listEl, index)` | Remove one file from a `FileList` by rebuilding via `DataTransfer` |
-| `updateFileList(input, listEl)` | Render selected files with remove buttons |
-| `setupZone(zone, input, listEl, allowedExts)` | Wire click + drag-and-drop on an upload zone |
-| `updateProcessBtn()` | Enable Process button when results files are selected |
-| `startPolling(jobId)` | 1-second interval polling of `/api/status` |
-| `poll(jobId)` | One poll round — updates progress, handles complete/error |
-| `setProgress(pct, text)` | Animate progress bar |
-| `showWarnings(warnings)` | Render running-state warnings |
-| `showSuccess(jobId)` | Reveal success card; set download link |
-| `showError(msg)` | Reveal error card; re-render last warnings |
-| `resetUI()` | Clear all state and return to upload section |
+| `removeFileAt` / `updateFileList` | Rebuild `FileList` via `DataTransfer`; render rows with remove buttons |
+| `showZoneNotice` | Show/hide per-zone drop-reject message |
+| `setupZone(zone, input, listEl, browseBtn, noticeEl, allowedExts)` | Wire browse/click/drag-drop; drop filters by extension, counts skipped |
+| `updateProcessBtn` | Enable Process when results selected |
+| `startPolling` / `poll` | 1 s `/api/status` loop; branches complete/cancelled/error; stall detection |
+| `logLine` | Append timestamped activity-log line |
+| `showWarnings` | Render warnings; skips identical re-renders (aria-live hygiene) |
+| `showSuccess` / `renderSummary` | Reveal success card, set download href, render summary + zero-severity note |
+| `showError` | Reveal error card, re-render last warnings |
+| `resetSections` / `resetUI` / `softReset` | Full reset (clears files) vs soft reset (keeps file selections after error/cancel) |
+| cancel handler | POSTs `/api/cancel/<id>`, disables button |
+| reconnect block | On load, polls `/api/status/<existing_job_id>` and re-attaches to a running/complete job |
 
-**Bottom of script:** auto-reconnect block that polls `/api/status/<existing_job_id>` on page load if the session held a job ID.
+Poll fault tolerance: `pollFailures >= 10` → give-up message; `unchangedPolls >= 20` → stall note.
 
 ---
 
-## 10. UI — Stylesheet (`app/static/style.css`)
+## 11. UI — Stylesheet (`app/static/style.css`)
 
-Pure custom CSS — **no framework**. Single file, well under 320 lines. Catalogued by section:
+Pure custom CSS, no framework, ~596 lines. Light + dark via `color-scheme` + `prefers-color-scheme`.
 
-### 10.1 Reset & root variables
-- Universal box-sizing reset (`*`, `*::before`, `*::after`)
-- `:root` CSS variables:
+### 11.1 Fonts & reset
+Three `@font-face` (Public Sans 400/600/700, self-hosted woff2, `font-display: swap` — works air-gapped). Universal box-sizing + margin/padding reset.
 
-| Variable | Value | Purpose |
+### 11.2 Tokens (`:root`)
+Type scale: `--text-caption .75` / `--text-small .875` / `--text-body 1` / `--text-title 1.25` / `--text-display 1.75` rem, `--text-mono .8125`, `--leading-body`.
+Light palette: `--color-bg #f3f4f7`, `--color-surface #fdfdfe`, `--color-border #d8dce4`, `--color-primary #1f5fc4` (+`-h`, `--color-on-primary`), `--color-accent-bg/-br`, `--color-danger #b42318` (+`-tint`), `--color-success #1a7f37`, `--color-warning-bg/-br/-text`, `--color-text #20262e`, `--color-muted #4b5768` (WCAG AA ≥4.5:1), `--radius 8px`, `--shadow`.
+**Dark override** (`@media prefers-color-scheme: dark`): deep-slate re-map of every token, no neon; bumped `--leading-body 1.55`.
+
+### 11.3 Sections
+| Group | Selectors |
+|---|---|
+| Layout | `body`, `a`, `.container` (max 860px) |
+| Header | `header`, `header h1` (display, `-.02em`), `.subtitle` |
+| Upload grid | `.upload-grid` (2-col → 1-col ≤580px, `minmax(0,1fr)`), `.upload-zone` (+`:hover`/`.dragover`), `.zone-icon`, `.upload-zone h2` (uppercase small caps), `.badge-optional` (pill), `.upload-zone p`, `.zone-notice`, `.noscript-note` |
+| File list | `.file-list` (scroll, max 120px), `.file-list li`, `.file-name` (mono, ellipsis, `::before` green ✓), `.file-remove` (+`:hover`/`:focus-visible` red tint) |
+| Focus | `.btn/.file-remove/a :focus-visible` — 2px primary outline |
+| Buttons | `.btn`, `.btn-primary` (+hover), `.btn-secondary` (+hover), `.btn:disabled`, `.form-actions` |
+| Touch | `@media (pointer: coarse)` — 44px min targets |
+| Progress | `#progress-section`, shared `h2`, `.activity-log` (mono, scroll 14rem), `.log-line`, `.log-time` (tabular), `.progress-text`, `.stall-note`, `.progress-actions` (right-aligned) |
+| Warnings | `.warnings-box` (+`h3`, `.warnings-lead`, `ul`, `li + li`, `li::before` ⚠) |
+| Result cards | `#result-section`, `.result-card`, `.result-icon` (success green / error red), `.result-card h2`, `.btn + .btn` |
+| Summary | `.report-summary` (+`:has(#summary-note…)` gap), `.summary-row`/`dt`/`dd` (tabular), `.summary-total`, `.summary-cat`, `.summary-cat1-open` (danger red), `.summary-note`, `#result-error p` |
+| Footer | `footer`, `footer .small` |
+| Motion | `@keyframes rise-in`, `draw-check`; card rise-in, self-drawing checkmark (`pathLength=1`), staggered summary rows, log-line fade, `.btn:active` press; **`@media (prefers-reduced-motion: reduce)`** kills all animation/transition |
+
+---
+
+## 12. Test Suite (`tests/`) — 234 functions / 20 files
+
+| File | # | Focus |
 |---|---|---|
-| `--color-bg` | `#f5f6fa` | Page background |
-| `--color-surface` | `#ffffff` | Card / panel background |
-| `--color-border` | `#dde1ea` | Default borders |
-| `--color-primary` | `#2563eb` | Primary actions |
-| `--color-primary-h` | `#1d4ed8` | Primary hover state |
-| `--color-danger` | `#dc2626` | Errors |
-| `--color-success` | `#16a34a` | Success state |
-| `--color-warning-bg` | `#fffbeb` | Warning panel background |
-| `--color-warning-br` | `#fbbf24` | Warning panel border |
-| `--color-text` | `#1e293b` | Body text |
-| `--color-muted` | `#64748b` | Secondary text |
-| `--radius` | `8px` | Border radius |
-| `--shadow` | `0 1px 4px rgba(0,0,0,.08)` | Card shadow |
+| `test_xccdf_parser.py` | 44 | SCC/OpenSCAP/Nessus/Evaluate-STIG fixtures, status codes, edge cases, multi-TestResult, `.ckl` rejection |
+| `test_matcher.py` | 23 | Finding assembly, status mapping/discards, benchmark fallbacks, duplicate targets |
+| `test_benchmark_parser.py` | 22 | XCCDF 1.1 + 1.2 parsing, severity, vuln-id stripping, edge cases |
+| `test_web.py` | 17 | Routes, validation, rate limit, cancel, download, ownership 404s |
+| `test_cklb_parser.py` | 17 | CKLB JSON parsing, severity overrides, status mapping, malformed input |
+| `test_nessus_parser.py` | 16 | `.nessus` compliance parsing, reference tokens, host metadata, vuln-scan warning |
+| `test_cli.py` | 15 | Arg parsing, path resolution, optional/omitted benchmarks, error exit |
+| `test_excel_exporter.py` | 13 | Sheet structure, headers, freeze/filter, COUNTIFS, empty raises, CSV sanitize |
+| `test_parser_hardening.py` | 11 | XXE / billion-laughs / SSRF protections across parsers |
+| `test_zip_extract.py` | 11 | XCCDF extraction, nesting, collisions, bad ZIP, size/depth caps |
+| `test_filter.py` | 7 | Kept vs discarded statuses |
+| `test_pipeline.py` | 7 | `parse_stage` routing, self-contained formats, PipelineError messages, summary |
+| `test_artifact_store_local.py` | 5 | Local blob round-trip, traversal rejection |
+| `test_job_store_memory.py` | 5 | Memory store CRUD, thread safety |
+| `test_stages.py` | 5 | Async stage entrypoints, unsafe-filename rejection |
+| `test_artifact_store_s3.py` | 4 | S3 store via moto |
+| `test_job_store_dynamo.py` | 4 | Dynamo store via moto |
+| `test_findings_io.py` | 4 | JSON round-trip, unknown-key tolerance |
+| `test_core_import.py` | 3 | `app.core` imports stay boto3-free where required |
+| `test_oval_parser.py` | 1 | Stub raises `NotImplementedError` |
 
-### 10.2 Base typography & layout
-- `body` — Arial sans-serif, 14px, slate text on grey background
-- `.container` — max 860px, centred, 2rem padding top
-
-### 10.3 Header
-| Selector | Role |
-|---|---|
-| `header` | Centred block, 2rem bottom margin |
-| `header h1` | 1.75rem, 700 weight, tight letter-spacing |
-| `.subtitle` | Muted text under h1 |
-
-### 10.4 Upload grid
-| Selector | Role |
-|---|---|
-| `.upload-grid` | 2-column CSS grid, collapses to 1-column under 580px |
-| `.upload-zone` | Dashed-border card, 2rem padding, hover/dragover highlight |
-| `.upload-zone:hover`, `.upload-zone.dragover` | Blue border + tinted background |
-| `.zone-icon` | 2.5rem emoji/glyph |
-| `.upload-zone h2` | 1rem 700 weight |
-| `.badge-optional` | Small blue pill next to "STIG Benchmarks" heading — `Optional for SCC` indicator |
-| `.upload-zone p` | Muted helper text under heading |
-| `.file-list` | List-style none, max-height 120px, scrollable |
-| `.file-list li` | Flex row, name + remove button |
-| `.file-list .file-name` | Truncated with ellipsis |
-| `.file-list .file-name::before` | Green check pseudo-element |
-| `.file-list .file-remove` | Transparent X button, hover highlights red |
-| `.file-list .file-remove:hover/:focus` | Red tint background |
-
-### 10.5 Buttons
-| Selector | Role |
-|---|---|
-| `.btn` | Base button — padding, radius, weight, transition |
-| `.btn-primary` | Blue background, white text |
-| `.btn-primary:hover:not(:disabled)` | Darker blue |
-| `.btn-secondary` | White background, default border |
-| `.btn-secondary:hover` | Grey tint |
-| `.btn:disabled` | 45% opacity, not-allowed cursor |
-| `.form-actions` | Centred container for submit button |
-
-### 10.6 Progress
-| Selector | Role |
-|---|---|
-| `#progress-section` | Card with shadow + padding |
-| `#progress-section h2` | 1rem bottom margin |
-| `.progress-bar-wrap` | 10px high track |
-| `.progress-bar` | Animated fill (`width` transitions 400ms) |
-| `.progress-text` | Muted, min-height 1.2em |
-
-### 10.7 Warnings
-| Selector | Role |
-|---|---|
-| `.warnings-box` | Amber tinted panel |
-| `.warnings-box h3` | Dark amber heading |
-| `.warnings-box ul` | List-style none |
-| `.warnings-box li + li` | Top-margin spacer |
-| `.warnings-box li::before` | "⚠ " pseudo-element |
-
-### 10.8 Result cards
-| Selector | Role |
-|---|---|
-| `#result-section` | Top spacing |
-| `.result-card` | Big card, 2.5rem padding, centred text |
-| `.result-icon` | 3rem icon (check or X) |
-| `.result-card h2` | 1.25rem bottom margin |
-| `.result-card.success .result-icon` | Green colour |
-| `.result-card.error .result-icon` | Red colour |
-| `.result-card .btn + .btn` | Left margin between buttons |
-| `#result-error p` | Danger-red error message text |
-
-### 10.9 Footer
-| Selector | Role |
-|---|---|
-| `footer` | Centred, muted, 3rem top margin |
-| `footer .small` | Smaller disclaimer text |
+**Fixtures (`tests/fixtures/`):** `scc_results.xml`, `openscap_results.xml`, `nessus_results.xml`, `evaluate_stig_results.xml`, `sample_benchmark.xml` — all fabricated, no real DoD data.
 
 ---
 
-## 11. Test Suite (`tests/`)
+## 13. Configuration
 
-### 11.1 Coverage by module
+### 13.1 `pyproject.toml`
+- `[project]` name `stig-parser`, version `0.1.0`, requires-python `>=3.11`, MIT.
+- deps: `flask>=3.0`, `lxml>=5.0`, `openpyxl>=3.1`, `boto3>=1.34`.
+- `[optional-dependencies].dev`: `pytest>=8.0`, `pytest-cov>=4.0`, `moto[s3,dynamodb]>=5.0`.
+- `[project.scripts]` `stig-parser = app.cli:main`. `[tool.pytest.ini_options]` testpaths `["tests"]`. Packages: `app*`.
 
-| Test file | Class / Group | # tests | What it covers |
-|---|---|---|---|
-| `test_xccdf_parser.py` | `TestSCCResults` | 13 | Real SCC fixture: hostname, IP, benchmark refs, scanner detection, all 7 status codes |
-| | `TestOpenSCAPResults` | 6 | OpenSCAP fixture |
-| | `TestNessusResults` | 5 | Nessus fixture |
-| | `TestEvaluateSTIGResults` | 5 | Evaluate-STIG fixture |
-| | `TestEdgeCases` | 22 | Invalid XML, missing target/IP, `<target-facts>` fallbacks, nested TestResult, no-result fallback |
-| `test_benchmark_parser.py` | `TestSampleBenchmark` | 11 | XCCDF 1.1 sample parsing — severity mapping, vuln IDs, check/fix text |
-| | `TestXCCDF12Benchmark` | 7 | XCCDF 1.2 inline-from-SCC parsing + vuln_id stripping |
-| | `TestEdgeCases` | 2 | Invalid XML, empty benchmark |
-| `test_matcher.py` | `TestMatchedResults` | 8 | End-to-end finding assembly |
-| | `TestStatusMapping` | 9 | All XCCDF status → display mappings, including discards |
-| | `TestUnmatchedBenchmark` | 2 | Missing/wrong benchmark → blank check/fix |
-| | `TestBenchmarkMatchFallback` | 2 | href stem + substring fallbacks |
-| | `TestFullyQualifiedBenchmarkIds` | 1 | Regression: real-world XCCDF ids don't all collapse to `xccdf_mil.disa` |
-| | `TestDuplicateTargets` | 1 | Same host parsed twice → both rows kept |
-| `test_filter.py` | (module-level) | 7 | All four kept statuses + discards + mixed |
-| `test_excel_exporter.py` | `TestFindingsSheet` | 5 | Sheet existence, headers, row count, freeze panes, auto-filter |
-| | `TestSummarySheet` | 5 | All three table headers + COUNTIFS presence and `Findings!` references |
-| | `TestErrorCases` | 2 | Empty findings raises; file gets created |
-| `test_zip_extract.py` | `TestExtractXccdfFromZip` | 7 | Single XCCDF, folder flattening, no XCCDF, nested ZIP, collisions, bad ZIP, case-insensitive |
-| | `TestExpandBenchmarkPaths` | 4 | XML pass-through, ZIP expansion, empty-zip warning, uppercase `.ZIP` |
-| `test_oval_parser.py` | (module-level) | 1 | Stub raises `NotImplementedError` |
-| `test_cli.py` | `TestArgumentParsing` | 7 | `--results` required, `--benchmarks` optional/empty/multi, `--output`/`--verbose` |
-| | `TestResolvePaths` | 4 | Directory expansion (.xml only / .xml+.zip), explicit file, glob pattern |
-| | `TestMainSeparateBenchmarks` | 1 | End-to-end run with `--benchmarks` supplied |
-| | `TestMainOptionalBenchmarks` | 2 | `--benchmarks` omitted / empty flag — results files used for both sides |
-| | `TestMainErrorCases` | 1 | Empty results dir → exit 1 |
-| `test_web.py` | `TestIndexRoute` | 2 | `/` returns 200, "Optional for SCC" badge present |
-| | `TestProcessValidation` | 2 | Missing/empty results → 400 |
-| | `TestProcessWithSeparateBenchmark` | 2 | Pipeline completes; download serves a valid `.xlsx` |
-| | `TestProcessWithoutBenchmark` | 2 | Results-only upload accepted; worker thread runs to completion |
-| | `TestStatusRoute` / `TestDownloadRoute` | 2 | Unknown job → 404 |
-| **Total** | | **146** | |
-
-### 11.2 Fixtures (`tests/fixtures/`)
-
-| File | Bytes | `rule-result` count | `<Rule>` defs | Scanner |
-|---|---|---|---|---|
-| `scc_results.xml` | 2,822 | 14 | 0 | SCC |
-| `openscap_results.xml` | 2,338 | 12 | 0 | OpenSCAP |
-| `nessus_results.xml` | 2,108 | 8 | 0 | Nessus |
-| `evaluate_stig_results.xml` | 2,003 | 8 | 0 | Evaluate-STIG |
-| `sample_benchmark.xml` | 9,637 | 0 | 7 | n/a — benchmark definitions |
-
-All fabricated; no real DoD data in the repo.
+### 13.2 `.github/workflows/ci.yml`
+`CI` on push/PR to `main`; matrix Python 3.11 & 3.12 on ubuntu-latest; `pip install -e ".[dev]"` → `pytest tests/ -v --tb=short`.
 
 ---
 
-## 12. Configuration
+## 14. Deployment
 
-### 12.1 `pyproject.toml`
+### 14.1 `Dockerfile`
+`python:3.11-slim`; installs `libxml2` + `libxslt1.1`; copies `pyproject.toml` + `app/`, `pip install -e .`; `STIG_TEMP_DIR=/tmp/stig-parser-jobs`; EXPOSE 5000; CMD flask run `app.web:create_app` on `0.0.0.0:5000`.
 
-| Section | Key | Value |
-|---|---|---|
-| `[build-system]` | requires | `setuptools>=68`, `wheel` |
-| | build-backend | `setuptools.build_meta` |
-| `[project]` | name | `stig-parser` |
-| | version | `0.1.0` |
-| | requires-python | `>=3.11` |
-| | license | MIT |
-| | dependencies | `flask>=3.0`, `lxml>=5.0`, `openpyxl>=3.1` |
-| `[project.optional-dependencies].dev` | | `pytest>=8.0`, `pytest-cov>=4.0` |
-| `[project.scripts]` | stig-parser | `app.cli:main` |
-| `[tool.pytest.ini_options]` | testpaths | `["tests"]` |
-
-### 12.2 `.github/workflows/ci.yml`
-
-GitHub Actions workflow `CI`:
-- Triggers: push & PR to `main`
-- Matrix: Python `3.11`, `3.12` on `ubuntu-latest`
-- Steps: checkout → setup-python → `pip install -e ".[dev]"` → `pytest tests/ -v --tb=short`
+### 14.2 `docker-compose.yml`
+Service `stig-parser`: build local, `5000:5000`, named volume `stig-tmp` at `/tmp/stig-parser-jobs`, env `FLASK_SECRET_KEY` (placeholder) + `STIG_TEMP_DIR`, `restart: unless-stopped`.
 
 ---
 
-## 13. Deployment
+## 15. Documentation & Design Docs
 
-### 13.1 `Dockerfile`
-
-- Base: `python:3.11-slim`
-- System deps: `libxml2`, `libxslt1.1` (for lxml)
-- Copies `pyproject.toml` + `app/`, installs via `pip install -e .`
-- Sets `STIG_TEMP_DIR=/tmp/stig-parser-jobs`
-- Exposes port `5000`
-- CMD: `python -m flask --app app.web:create_app run --host 0.0.0.0 --port 5000`
-
-### 13.2 `docker-compose.yml`
-
-Single service `stig-parser`:
-- Build from local Dockerfile
-- Port mapping `5000:5000`
-- Named volume `stig-tmp` mounted at `/tmp/stig-parser-jobs`
-- Environment: `FLASK_SECRET_KEY` (placeholder), `STIG_TEMP_DIR`
-- `restart: unless-stopped`
+- `README.md` — scanners, output reference, install (pip/Docker), Web+CLI usage, pipeline overview, DISA benchmark source, LibreOffice notes, contributing, roadmap, MIT.
+- `RESIDUALS.md` — residual-risk / known-limitations notes.
+- `docs/superpowers/specs/2026-07-07-govcloud-replatform-design.md` — GovCloud/Bedrock/React/Terraform re-platform spec (motivates the `app/core/` boundaries + `stages.py`).
+- `docs/superpowers/plans/2026-07-07-backend-async-rearchitecture.md` — async rearchitecture plan.
+- `LICENSE` — MIT.
 
 ---
 
-## 14. Documentation
-
-### 14.1 `README.md` — sections
-
-1. **Title + description**
-2. **Supported Scanners** — status table
-3. **Output** — workbook column reference + auto-filter caveat
-4. **Installation** — pip & Docker
-5. **Usage** — Web UI + CLI examples + argument table
-6. **How It Works** — six-step pipeline summary
-7. **STIG Benchmark Files** — DISA public source link
-8. **LibreOffice Compatibility** — formula + formatting parity notes
-9. **Contributing** — fork → tests → PR
-10. **Roadmap** — OVAL parsing, STIG ID prefix fallback, scanner validation, local STIG library, CKL export, delta reporting, REST API
-11. **License** — MIT
-
-### 14.2 `LICENSE`
-Standard MIT licence text.
-
----
-
-## 15. Data Flow Summary
+## 16. Data Flow Summary
 
 ```
-┌──────────────┐     ┌──────────────┐
+┌──────────────┐     ┌───────────────┐
 │ Upload form  │     │ CLI invocation│
-└──────┬───────┘     └──────┬───────┘
+│ (web.py)     │     │ (cli.py)      │
+└──────┬───────┘     └──────┬────────┘
        └────────┬───────────┘
                 ▼
-┌──────────────────────────────────────────┐
-│ expand_benchmark_paths   (zip_extract)   │  ⟵  optional ZIP unwrap
-└──────────────┬───────────────────────────┘
-               ▼
-┌──────────────────────────────────────────┐
-│ detect_scanner           (scanner_detect)│
-│ XCCDFResultsParser.parse → ScanResult    │
-│ BenchmarkParser.parse    → Benchmark     │  ⟵  same SCC file may feed both
-└──────────────┬───────────────────────────┘
-               ▼
-┌──────────────────────────────────────────┐
-│ match_results_to_benchmarks  (matcher)   │
-│ filter_findings              (filter)    │
-└──────────────┬───────────────────────────┘
-               ▼
-┌──────────────────────────────────────────┐
-│ ExcelExporter.export                     │
-│ → Findings + Summary sheets              │
-└──────────────────────────────────────────┘
+      app.core.pipeline.parse_stage
+                │
+   ┌────────────┼─────────────────────────┐
+   ▼            ▼                          ▼
+.cklb/.nessus   XCCDF (.xml)          expand ZIPs
+self-contained  detect_scanner        (zip_extract)
+→ Finding[]     XCCDFResultsParser         │
+                BenchmarkParser ◄───────────┘
+                        │
+                match_results_to_benchmarks → filter_findings
+                        ▼
+                 list[Finding]  ── compute_summary ──► {files,hosts,cat1..3}
+                        ▼
+              export_stage → ExcelExporter
+                        ▼
+              Findings + Summary  .xlsx
+
+Async variant (stages.py, future Lambda):
+  run_parse_stage → ArtifactStore(findings.json) → run_export_stage → report.xlsx
+  status via JobStore (Memory today, Dynamo in GovCloud)
 ```
 
 ---
 
-*Generated 2026-05-15.*
+*Regenerated 2026-07-13 against current tree (adds `app/core/`, CKLB + .nessus parsers, cancel/readme routes, rate limiting, run summary, hardening tests).*
