@@ -23,10 +23,11 @@ htmlcov/
 tmp/
 *.xlsx
 
-# IDE
+# IDE / agent tooling
 .vscode/
 .idea/
 *.iml
+.claude/
 
 # OS
 .DS_Store
