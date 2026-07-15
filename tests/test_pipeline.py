@@ -334,3 +334,17 @@ def test_pipeline_error_warnings_default_to_empty_list():
     # Callers that raise it themselves (e.g. a cancel_check) keep working.
     assert PipelineError("cancelled").warnings == []
 
+def test_parse_stage_progress_cb_reports_per_file(tmp_path):
+    a = tmp_path / "a.xml"
+    b = tmp_path / "b.xml"
+    a.write_text("<x/>", encoding="utf-8")
+    b.write_text("<x/>", encoding="utf-8")
+    msgs = []
+
+    # Two unparseable results files still emit a progress line each before the
+    # PipelineError; assert the per-file "(n of total)" counter is surfaced.
+    with pytest.raises(PipelineError):
+        parse_stage([a, b], [], tmp_path / "e", progress_cb=msgs.append)
+
+    assert any("1 of 2" in m for m in msgs)
+    assert any("2 of 2" in m for m in msgs)

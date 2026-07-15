@@ -313,6 +313,9 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
         def _cancel_check() -> None:
             _raise_if_cancelled(job_id)
 
+        def _progress(msg: str) -> None:
+            _set_job(job_id, progress=msg)
+
         _set_job(job_id, progress="Parsing files…")
         try:
             result = parse_stage(
@@ -320,6 +323,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
                 benchmark_paths,
                 _job_dir(job_id) / "benchmarks_extracted",
                 cancel_check=_cancel_check,
+                progress_cb=_progress,
             )
         except PipelineError as exc:
             _set_job(

@@ -25,6 +25,18 @@
   font-display: swap;
 }
 
+/* Metric-matched fallback: Arial re-scaled to Public Sans' footprint so
+   font-display:swap swaps the web font in without reflowing the layout.
+   Override values published by Fontsource for Public Sans over Arial. */
+@font-face {
+  font-family: 'Public Sans Fallback';
+  src: local('Arial');
+  ascent-override: 93.85%;
+  descent-override: 24.65%;
+  line-gap-override: 0%;
+  size-adjust: 101.44%;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -89,7 +101,7 @@
 }
 
 body {
-  font-family: 'Public Sans', 'Segoe UI', Arial, Helvetica, sans-serif;
+  font-family: 'Public Sans', 'Public Sans Fallback', 'Segoe UI', Arial, Helvetica, sans-serif;
   font-size: var(--text-body);
   color: var(--color-text);
   background: var(--color-bg);
@@ -99,6 +111,23 @@ body {
 
 a {
   color: var(--color-primary);
+}
+
+/* Wrap quality: balance headings to avoid orphan words; pretty body copy
+   to prevent short last lines and ragged rivers. */
+header h1,
+#progress-section h2,
+.result-card h2,
+.warnings-box h3 {
+  text-wrap: balance;
+}
+
+.subtitle,
+.upload-zone p,
+.warnings-lead,
+.summary-note,
+#result-error p {
+  text-wrap: pretty;
 }
 
 .container {
@@ -131,10 +160,23 @@ header h1 {
 
 .upload-grid {
   display: grid;
-  /* minmax(0,1fr): a long nowrap filename must not expand its column */
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Primary (results) column wider than the optional benchmark column —
+     size asymmetry signals which upload is the common path. minmax(0,…):
+     a long nowrap filename must not expand its column. */
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 1.25rem;
   margin-bottom: 1.5rem;
+}
+
+/* Optional benchmark zone recedes into the page: transparent fill lets the
+   surface-filled results zone read as the foreground action. Double class
+   out-specifies the base .upload-zone background regardless of source order. */
+.upload-zone.upload-zone-optional {
+  background: transparent;
+}
+
+.upload-zone-optional .zone-icon {
+  opacity: .75;
 }
 
 @media (max-width: 580px) {
@@ -209,9 +251,13 @@ header h1 {
   margin-bottom: .75rem;
 }
 
-.zone-notice {
+/* Filtering out disallowed files is expected behaviour, not an error —
+   caution tone, not danger red (reserved for real validation failures).
+   Qualified with .upload-zone p to out-specify the muted `.upload-zone p`
+   rule that would otherwise win the cascade. */
+.upload-zone p.zone-notice {
   font-size: var(--text-small);
-  color: var(--color-danger);
+  color: var(--color-warning-text);
   margin-top: .5rem;
 }
 
@@ -249,6 +295,7 @@ header h1 {
   white-space: nowrap;
   font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
   font-size: var(--text-mono);
+  font-variant-numeric: slashed-zero; /* version/rev numbers: 0 vs O */
 }
 
 .file-list .file-name::before {
@@ -329,6 +376,13 @@ a:focus-visible {
   text-align: center;
 }
 
+/* Reason shown while Process is disabled; hidden once a results file lands */
+.form-hint {
+  margin-top: .5rem;
+  font-size: var(--text-small);
+  color: var(--color-muted);
+}
+
 /* ── Progress ────────────────────────────────────────────────────────── */
 
 #progress-section {
@@ -352,9 +406,28 @@ a:focus-visible {
   margin-bottom: 1rem;
 }
 
+/* Liveness cue: a slow pulse next to "Processing" so the wait never reads as
+   frozen between step updates. Reduced-motion falls back to a steady dot. */
+.pulse {
+  display: inline-block;
+  width: .5rem;
+  height: .5rem;
+  border-radius: 50%;
+  background: var(--color-primary);
+  vertical-align: middle;
+  margin-left: .25rem;
+  animation: pulse-fade 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse-fade {
+  0%, 100% { opacity: .25; }
+  50%      { opacity: 1; }
+}
+
 .activity-log {
   font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
   font-size: var(--text-mono);
+  font-variant-numeric: slashed-zero; /* STIG rule IDs / counts: 0 vs O */
   line-height: 1.6;
   text-align: left;
   background: var(--color-bg);
@@ -374,7 +447,7 @@ a:focus-visible {
 .log-time {
   color: var(--color-muted);
   margin-right: .25rem;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: slashed-zero tabular-nums;
 }
 
 .progress-text {
@@ -464,6 +537,19 @@ a:focus-visible {
 
 .result-card .btn + .btn {
   margin-left: .75rem;
+}
+
+/* Narrow screens: stack the result actions full-width instead of wrapping
+   with a stray left margin that throws the second button off-center. */
+@media (max-width: 420px) {
+  .result-card .btn {
+    display: block;
+    width: 100%;
+  }
+  .result-card .btn + .btn {
+    margin-left: 0;
+    margin-top: .75rem;
+  }
 }
 
 /* Findings summary — report-manifest rows, not a stat dashboard */
@@ -592,4 +678,6 @@ footer .small {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  /* No pulse animation → hold the liveness dot fully visible, not mid-fade */
+  .pulse { opacity: 1; }
 }
