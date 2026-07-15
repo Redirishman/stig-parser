@@ -44,8 +44,8 @@
               <ul class="file-list" id="results-file-list"></ul>
             </div>
 
-            <!-- Benchmark drop zone -->
-            <div class="upload-zone" id="benchmarks-zone">
+            <!-- Benchmark drop zone (secondary: optional for the dominant SCC path) -->
+            <div class="upload-zone upload-zone-optional" id="benchmarks-zone">
               <div class="zone-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
@@ -63,9 +63,10 @@
           </div><!-- /.upload-grid -->
 
           <div class="form-actions">
-            <button type="submit" class="btn btn-primary" id="process-btn" disabled>
+            <button type="submit" class="btn btn-primary" id="process-btn" aria-describedby="process-hint" disabled>
               Process
             </button>
+            <p class="form-hint" id="process-hint">Add at least one scan-results file to continue.</p>
           </div>
 
         </form>
@@ -73,7 +74,7 @@
 
       <!-- Progress / status section (hidden until job starts) -->
       <section id="progress-section" hidden>
-        <h2>Processing</h2>
+        <h2>Processing <span class="pulse" aria-hidden="true"></span></h2>
         <div class="activity-log" id="activity-log" role="log" aria-live="polite"></div>
         <p id="stall-note" class="progress-text stall-note" aria-live="polite" hidden>Still working &mdash; large files can take a few minutes.</p>
         <div class="progress-actions">

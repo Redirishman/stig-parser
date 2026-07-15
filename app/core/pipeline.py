@@ -42,11 +42,15 @@ def parse_stage(
     extract_dir: Path,
     *,
     cancel_check: Callable[[], None] | None = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> ParseResult:
     """Parse results + benchmarks, match, and filter to actionable findings.
 
     ``cancel_check`` is an optional zero-arg callable invoked between units of
     work; it may raise to abort (the Flask worker uses this for cancellation).
+    ``progress_cb`` is an optional callable given a user-safe status string
+    before each results file is parsed (the Flask worker surfaces these as
+    activity-log lines so a long parse never looks frozen).
     Raises :class:`PipelineError` (user-safe message) when no actionable
     findings can be produced.
     """
@@ -54,6 +58,10 @@ def parse_stage(
     def _check() -> None:
         if cancel_check is not None:
             cancel_check()
+
+    def _progress(msg: str) -> None:
+        if progress_cb is not None:
+            progress_cb(msg)
 
     warnings: list[str] = []
 
@@ -86,10 +94,17 @@ def parse_stage(
         else:
             warnings.append(f"Could not parse benchmark: {path.name}")
 
+    # Per-file progress over the results files — the dominant, multi-minute
+    # phase. Benchmarks parse fast and aren't counted here.
+    total_results = len(xccdf_paths) + len(sc_paths)
+    done = 0
+
     results_parser = XCCDFResultsParser()
     scan_results = []
     for path in xccdf_paths:
         _check()
+        done += 1
+        _progress(f"Parsing {path.name} ({done} of {total_results})…")
         sr = results_parser.parse(path)
         if sr:
             scan_results.append(sr)
@@ -100,6 +115,8 @@ def parse_stage(
     sc_file_count = 0
     for path in sc_paths:
         _check()
+        done += 1
+        _progress(f"Parsing {path.name} ({done} of {total_results})…")
         parsed = _SELF_CONTAINED[path.suffix.lower()]().parse(path)
         if parsed is None:
             warnings.append(f"Could not parse results file: {path.name}")
