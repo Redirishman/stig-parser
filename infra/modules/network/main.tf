@@ -144,7 +144,8 @@ resource "aws_route_table_association" "private" {
 resource "aws_security_group" "lambda" {
   #checkov:skip=CKV2_AWS_5:Attached to the Lambda ENIs by the compute module (vpc_config.security_group_ids). checkov cannot see the attachment across a module boundary.
   name_prefix = "${var.name_prefix}-lambda-"
-  description = "STIG Condenser Lambda ENIs — egress to VPC endpoints only."
+  # EC2 rejects GroupDescription characters beyond ASCII — plain hyphens only.
+  description = "STIG Condenser Lambda ENIs - egress to VPC endpoints only."
   vpc_id      = aws_vpc.this.id
 
   egress {
@@ -165,7 +166,8 @@ resource "aws_security_group" "lambda" {
 # Interface-endpoint ENIs. Accept 443 only from the Lambda SG.
 resource "aws_security_group" "vpce" {
   name_prefix = "${var.name_prefix}-vpce-"
-  description = "Interface VPC endpoints — 443 from Lambda SG only."
+  # EC2 rejects GroupDescription characters beyond ASCII — plain hyphens only.
+  description = "Interface VPC endpoints - 443 from Lambda SG only."
   vpc_id      = aws_vpc.this.id
 
   ingress {
