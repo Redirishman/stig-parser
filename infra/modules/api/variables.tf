@@ -49,6 +49,33 @@ variable "spa_serving_mode" {
   }
 }
 
+variable "uploads_bucket_name" {
+  description = "Uploads bucket whose browser PUT path needs exact-origin CORS."
+  type        = string
+  nullable    = false
+}
+
+variable "additional_upload_cors_origins" {
+  description = <<-EOT
+    Additional exact HTTPS browser origins allowed to PUT to the uploads
+    bucket. Managed SPA modes automatically include the API Gateway origin.
+    Mode `none` must supply at least one origin and must place API calls behind
+    the same-origin internal facade; this module does not add cross-origin API
+    Gateway routes or response headers.
+  EOT
+  type        = set(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition = alltrue([
+      for origin in var.additional_upload_cors_origins :
+      can(regex("^https://[^/:@?#*\\s]+(:[0-9]{1,5})?$", origin))
+    ])
+    error_message = "Each additional upload CORS origin must be an exact HTTPS origin (scheme and host, optional port), with no wildcard, credentials, path, query, fragment, or trailing slash."
+  }
+}
+
 variable "kms_key_arn" {
   description = "CMK for the SPA bucket (apigw_s3_proxy mode) and the access-log group."
   type        = string
