@@ -2,11 +2,16 @@ services:
   stig-parser:
     build: .
     ports:
-      - "5000:5000"
+      # Bind to loopback only — this is a single-operator local tool, not a
+      # network service. Publishing on 0.0.0.0 would expose it to the LAN.
+      - "127.0.0.1:5000:5000"
     volumes:
       - stig-tmp:/tmp/stig-parser-jobs
     environment:
-      - FLASK_SECRET_KEY=change-me-in-production
+      # No default: a committed secret is a known session-signing key (forgeable
+      # cookies). Fail startup unless the operator supplies one, e.g. via a
+      # .env file or `FLASK_SECRET_KEY=$(openssl rand -hex 32) docker compose up`.
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:?set FLASK_SECRET_KEY to a random 32-byte hex string}
       - STIG_TEMP_DIR=/tmp/stig-parser-jobs
     restart: unless-stopped
 
