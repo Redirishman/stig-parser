@@ -346,6 +346,45 @@ class TestJobCleanup:
         assert not old.exists()
         assert fresh.exists()
 
+    def test_sweep_spares_stale_dir_of_running_job(self, tmp_path, monkeypatch):
+        """A job still 'running' must not be reaped no matter how stale its dir.
+
+        Guards against the sweeper deleting a live worker's inputs out from under
+        it — e.g. a slow parse of a huge archive that hasn't touched disk in >8h.
+        """
+        import importlib
+        import os
+        monkeypatch.setenv("STIG_TEMP_DIR", str(tmp_path / "jobs"))
+        import app.web as web_module
+        importlib.reload(web_module)
+
+        temp_dir = tmp_path / "jobs"
+        temp_dir.mkdir(parents=True)
+        running = temp_dir / "running-job"
+        orphan = temp_dir / "orphan-job"
+        running.mkdir()
+        orphan.mkdir()
+
+        # Both dirs are equally stale; only status distinguishes them.
+        stale = time.time() - (web_module._ORPHAN_MAX_AGE_HOURS + 1) * 3600
+        os.utime(running, (stale, stale))
+        os.utime(orphan, (stale, stale))
+
+        # The running job has a live, non-terminal in-memory status; the orphan
+        # has no entry at all (as if left by a prior process).
+        web_module._set_job("running-job", status="running")
+
+        web_module._sweep_orphaned_jobs()
+
+        assert running.exists(), "sweeper deleted a running job's working dir"
+        assert not orphan.exists()
+
+        # A terminal status is fair game once stale (e.g. a completed, never
+        # downloaded report).
+        web_module._set_job("running-job", status="complete")
+        web_module._sweep_orphaned_jobs()
+        assert not running.exists()
+
     def test_start_orphan_sweeper_runs_sweep(self, tmp_path, monkeypatch):
         import importlib
         import os

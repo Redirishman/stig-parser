@@ -59,6 +59,11 @@ def _rate_limited(client_ip: str) -> bool:
 
 _TEMP_DIR = Path(os.environ.get("STIG_TEMP_DIR", Path(__file__).parent.parent / "tmp"))
 _ORPHAN_MAX_AGE_HOURS = 8
+# Statuses with no outgoing edges: the worker is done touching the job's files.
+# A dir whose in-memory status is anything else (chiefly "running", including a
+# job mid-cancellation) is still owned by a live worker thread and must never be
+# swept, regardless of how stale its mtime looks.
+_TERMINAL_STATUSES = frozenset({"complete", "error", "cancelled"})
 
 def _reject_upload(fs) -> str | None:
     """Return a user-safe rejection message for a bad upload, else None.
@@ -409,6 +414,14 @@ def _sweep_orphaned_jobs() -> None:
     cutoff = time.time() - _ORPHAN_MAX_AGE_HOURS * 3600
     for entry in _TEMP_DIR.iterdir():
         if entry.is_dir():
+            # Never reap a job a live worker still owns. A dir with no in-memory
+            # entry (status "") is a true orphan from a prior process and is
+            # eligible; a non-terminal status means the worker is still using
+            # these files even if the dir's mtime has gone stale (e.g. a slow
+            # parse of a large archive that hasn't written for hours).
+            status = _get_job(entry.name).get("status", "")
+            if status and status not in _TERMINAL_STATUSES:
+                continue
             try:
                 if entry.stat().st_mtime < cutoff:
                     shutil.rmtree(entry, ignore_errors=True)
