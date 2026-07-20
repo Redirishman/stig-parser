@@ -1,5 +1,9 @@
 # Normalize line endings for cross-platform consistency
 * text=auto
 
+# Shell scripts must stay LF — they run in WSL/Linux (e.g. infra/scripts/*.sh),
+# and bash chokes on CRLF shebangs checked out on Windows.
+*.sh text eol=lf
+
 # Fixtures — keep as-is
 tests/fixtures/*.xml text eol=lf

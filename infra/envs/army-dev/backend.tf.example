@@ -1,0 +1,17 @@
+# Copy to backend.tf (gitignored — it names real org infrastructure) and fill in.
+#
+# (D2) The state bucket, lock table and KMS key are org-owned and must already
+# exist. Terraform state for this stack contains bucket names, ARNs and account
+# ids: encrypt it, lock it, and keep it in GovCloud with the rest of the system.
+
+terraform {
+  backend "s3" {
+    bucket = "REPLACE-org-terraform-state"
+    key    = "stig-condenser/example/terraform.tfstate"
+    region = "us-gov-west-1"
+
+    encrypt        = true
+    kms_key_id     = "REPLACE-arn-of-org-state-cmk"
+    dynamodb_table = "REPLACE-org-terraform-locks"
+  }
+}
