@@ -30,7 +30,8 @@ These are the master-doc §12 open items. **None block *authoring* the modules**
 | D3 | Upstream auth: identity header name, or none | ISSO / network | `var.identity_header` (API GW → Lambda mapping) | `"x-forwarded-user"` |
 | D4 | Claude model ID in `us-gov-west-1` Bedrock | Confirm at #4 | `var.bedrock_model_id` | `""` (AI off until set) |
 | D5 | CUI marking + retention (S3 lifecycle days, DynamoDB TTL days) | ISSO / records | `var.artifact_retention_days`, `var.job_ttl_days` | conservative placeholders, commented "policy decision" |
-| D6 | Private-SPA serving path (API-GW→S3 proxy vs Lambda-served vs internal ALB) | This sub-project | `var.spa_serving_mode` enum | `"apigw_s3_proxy"` (see §6) |
+| D6 | Private-SPA serving path and exact browser upload origin(s) | This sub-project | `var.spa_serving_mode`, `var.additional_upload_cors_origins` | `"apigw_s3_proxy"`; managed API origin only (see §6) |
+| D7 | Approved private client CIDRs and return-route ownership/targets | Org network team | `var.api_client_cidr_blocks`, `var.api_client_route_management`, `var.api_client_routes` | no client or route-owner default |
 
 **Recommendation:** proceed to author all modules against these variables now. Do not hard-code any account ID, VPC ID, or endpoint ID anywhere in committed `.tf`.
 
@@ -74,14 +75,14 @@ stig-parser/infra/
 Each module lists its non-obvious inputs, key resources, and outputs consumed downstream. All ARNs constructed with `data.aws_partition.current.partition` (== `aws-us-gov`), never a literal `aws`.
 
 ### 4.1 `network`
-- **In:** `vpc_cidr`, `az_count`, `private_subnet_cidrs`, `interface_endpoint_services` (list), `enable_x_ray`.
-- **Resources:** VPC (no IGW, no NAT); private subnets across AZs; route tables; **interface endpoints** for `execute-api`, `bedrock-runtime`, `states`, `logs`, `kms`, `sts` (+ `monitoring` if X-Ray); **gateway endpoints** for `s3`, `dynamodb`; endpoint security groups (443 from Lambda SG only); Lambda SG.
-- **Out:** `vpc_id`, `private_subnet_ids`, `lambda_sg_id`, `execute_api_endpoint_id` (API resource policy needs it), endpoint DNS.
-- **⚠ Cost:** each interface endpoint ~$7–8/mo. 6–7 endpoints ⇒ ~$50+/mo idle. README must state this.
+- **In:** `vpc_cidr`, `az_count`, `private_subnet_cidrs`, `interface_endpoint_services` (list), approved API-client CIDRs and return-route ownership/targets, `enable_x_ray`.
+- **Resources:** VPC (no IGW, no NAT); private subnets across AZs; route tables; **interface endpoints** for `execute-api`, client-facing `s3`, `bedrock-runtime`, `states`, `logs`, `kms`, `sts` (+ `monitoring` if X-Ray); **gateway endpoints** for Lambda `s3` and `dynamodb`; Lambda-only runtime endpoint SG; separate execute-api and S3-client SGs allowing TCP/443 only from approved operator networks; optional static client return routes; Lambda SG with gateway prefix-list egress. GovCloud S3 private DNS is unsupported, so presigned URLs use the interface endpoint's Regional endpoint-specific DNS name. VPN/DX/TGW/VGW attachments, reciprocal routes, and execute-api hybrid DNS are organization-managed prerequisites.
+- **Out:** `vpc_id`, `private_subnet_ids`, `lambda_sg_id`, execute-api endpoint/SG/DNS outputs, S3 interface and gateway endpoint ids, S3-client SG/DNS outputs, and the Regional S3 presigning endpoint URL.
+- **⚠ Cost:** PrivateLink bills per endpoint-hour in each selected AZ plus data processing. Seven required services across two AZs produce 14 billed endpoint-AZ units (+2 for optional monitoring); README must state this and require a current GovCloud estimate.
 
 ### 4.2 `storage`
 - **In:** `kms_key_arn` (or create CMK here), `artifact_retention_days`, `upload_retention_days`.
-- **Resources:** `uploads` + `artifacts` buckets — SSE-KMS (CMK), block-public-access all four flags, versioning, lifecycle expiry (D5), bucket policy denying non-TLS + non-VPCE access. CMK with rotation.
+- **Resources:** `uploads` + `artifacts` buckets — SSE-KMS (CMK), block-public-access all four flags, versioning, lifecycle expiry (D5), bucket policy denying non-TLS access. The API role's `aws:SourceVpce` conditions enforce the presigned object path without breaking organization-admin access. CMK with rotation.
 - **Out:** `uploads_bucket`, `artifacts_bucket`, `kms_key_arn`.
 
 ### 4.3 `data`
@@ -89,8 +90,8 @@ Each module lists its non-obvious inputs, key resources, and outputs consumed do
 - **Out:** `job_table_name`, `job_table_arn`.
 
 ### 4.4 `compute`
-- **In:** `backend_source_dir`, `job_table_name`, bucket names, `kms_key_arn`, `state_machine_arn` (for API Lambda), subnet/SG ids, `bedrock_model_id`, `bedrock_region`, `identity_header`, `ai_killswitch_param` (SSM).
-- **Resources:** four Lambdas — `api`, `parser`, `enricher`, `exporter` — each in-VPC, each with its `iam` role. Packaging: `archive_file` zip of `backend_source_dir` + handler shims; a shared **layer** for `lxml`/`openpyxl`/`boto3` deps (lxml needs the Linux wheel — build note in README). Per-function log group with retention.
+- **In:** `backend_source_dir`, `job_table_name`, bucket names, `kms_key_arn`, `state_machine_arn` and the Regional S3 PrivateLink presigning URL (API Lambda only), subnet/SG ids, `bedrock_model_id`, `bedrock_region`, `identity_header`, `ai_killswitch_param` (SSM).
+- **Resources:** five Lambdas — `api`, `parser`, `enricher`, `exporter`, `marker` — each in-VPC, each with its `iam` role. Packaging: `archive_file` zip of `backend_source_dir` + handler shims; a shared **layer** for `lxml`/`openpyxl` (lxml needs the Linux wheel — build note in README; runtime boto3 is not vendored). Per-function log group with retention.
 - **Out:** function ARNs (orchestration + api wiring), enricher name.
 - **Note:** stage Lambdas call the #1 entrypoints `run_parse_stage` / `run_export_stage` with an `S3ArtifactStore` + `DynamoJobStore`. Confirmed those already exist and are boto3-boundaried.
 
@@ -100,13 +101,13 @@ Each module lists its non-obvious inputs, key resources, and outputs consumed do
 - **Out:** `state_machine_arn`.
 
 ### 4.6 `api`
-- **In:** `execute_api_endpoint_id`, stage function ARNs, `identity_header`, `spa_serving_mode`.
-- **Resources:** **Private** REST API GW; **resource policy** allowing invoke ONLY via the VPC interface endpoint (deny all else); routes `POST /uploads`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` → API Lambda proxy; SPA serving per D6/§6; binary media types if S3-proxy mode. No API key, no public stage.
-- **Out:** `api_id`, `invoke_url` (VPC-internal), `spa_bucket` (if applicable).
+- **In:** `execute_api_endpoint_id`, stage function ARNs, `identity_header`, `spa_serving_mode`, uploads bucket, and optional exact upload-CORS origins.
+- **Resources:** **Private** REST API GW; **resource policy** allowing invoke ONLY via the VPC interface endpoint (deny all else); routes `POST /uploads`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` → API Lambda proxy; SPA serving per D6/§6; binary media types if S3-proxy mode; uploads-bucket CORS limited to exact origins, `PUT`, and `Content-Type`. No API key, no public stage.
+- **Out:** `api_id`, `invoke_url` (VPC-internal), `spa_bucket` (if applicable), exact upload-CORS origins.
 
 ### 4.7 `iam`
 - One role per Lambda, least-privilege, exact ARNs, `aws-us-gov`:
-  - `api`: `s3:PutObject/GetObject` (presign) on both buckets, `dynamodb:*Item` on job table, `states:StartExecution`, `ssm:GetParameter` (killswitch), KMS use.
+  - `api`: `s3:PutObject/GetObject` (presign) on exact bucket prefixes with `aws:SourceVpce` restricted to the client interface endpoint (plus the S3 gateway endpoint for report existence checks), exact DynamoDB item operations on the job table, `states:StartExecution`, `ssm:GetParameter` (killswitch), KMS use.
   - `parser`: read `uploads`, write `artifacts` (findings JSON), Dynamo update, KMS.
   - `enricher`: read/write `artifacts`, `bedrock-runtime:InvokeModel` on `var.bedrock_model_id` only, Dynamo update, KMS. (Empty/`Deny` until D4 set.)
   - `exporter`: read `artifacts` (findings JSON), write `artifacts` (xlsx), Dynamo update, KMS.
@@ -148,9 +149,10 @@ Author `apigw_s3_proxy` first; keep the module boundary so a swap is a variable 
 Triggered on `infra/**`:
 1. `terraform fmt -check -recursive`
 2. `terraform init -backend=false` + `terraform validate` (per module + env)
-3. `tflint` (aws-us-gov ruleset)
-4. `checkov` (fail on HIGH; document any nosec)
-5. **Leak scan** (§5 `git grep` guard) — fail on any match.
+3. `terraform test` for module-level private-network and upload-CORS contracts
+4. `tflint` (aws-us-gov ruleset)
+5. `checkov` (fail on HIGH; document any nosec)
+6. **Leak scan** (§5 `git grep` guard) — fail on any match.
 
 No `plan`/`apply` in public CI (needs GovCloud creds + private runner — D2/org runner placement).
 

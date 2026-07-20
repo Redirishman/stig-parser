@@ -24,6 +24,18 @@ def _sanitize_cell(value: object) -> object:
     return value
 
 
+def _formula_quote(value: object) -> str:
+    """Return an Excel double-quoted string literal with embedded quotes escaped.
+
+    Values interpolated into COUNTIFS criteria (hostname, STIG title) are
+    scan-derived and attacker-controllable. Excel escapes a literal " inside a
+    quoted string as "". Without this, a value containing a " breaks out of the
+    criteria literal and lets the upload author inject arbitrary formula text
+    into the accreditation-facing Summary sheet (CWE-1236).
+    """
+    return '"' + str(value).replace('"', '""') + '"'
+
+
 _FILL_CAT_I = PatternFill("solid", fgColor="FFCCCC")
 _FILL_CAT_II = PatternFill("solid", fgColor="FFEB9C")
 _FILL_CAT_III = PatternFill("solid", fgColor="C6EFCE")
@@ -170,7 +182,7 @@ class ExcelExporter:
             b(ws, row, 1, _sanitize_cell(server))
             b(ws, row, 2, _sanitize_cell(ip))
             for ci, sev in enumerate(severities, 3):
-                b(ws, row, ci, countifs2(_COL_SERVER, f'"{server}"', _COL_SEVERITY, f'"{sev}"'))
+                b(ws, row, ci, countifs2(_COL_SERVER, _formula_quote(server), _COL_SEVERITY, f'"{sev}"'))
             b(ws, row, 6, f"=SUM(C{row}:E{row})")
             row += 1
         row += 1  # spacer
@@ -185,7 +197,7 @@ class ExcelExporter:
         for stig in _unique_values(findings, "stig_title"):
             b(ws, row, 1, _sanitize_cell(stig))
             for ci, sev in enumerate(severities, 2):
-                b(ws, row, ci, countifs2(_COL_STIG, f'"{stig}"', _COL_SEVERITY, f'"{sev}"'))
+                b(ws, row, ci, countifs2(_COL_STIG, _formula_quote(stig), _COL_SEVERITY, f'"{sev}"'))
             b(ws, row, 5, f"=SUM(B{row}:D{row})")
             row += 1
         row += 1  # spacer

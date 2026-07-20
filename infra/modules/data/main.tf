@@ -1,6 +1,7 @@
 # DynamoDB job/status table. One item per job; the #1 DynamoJobStore encodes
-# all fields into a single JSON `data` attribute, so only the partition key and
-# the TTL attribute are modeled here. Spec §4.3.
+# all user-facing fields into one JSON `data` attribute and guards mutations
+# with a top-level numeric `version`. DynamoDB only requires the partition key
+# in the declared schema; `expiresAt` is configured below for TTL. Spec §4.3.
 #
 # The key name `job_id` and the TTL attribute `expiresAt` are a contract with
 # app/core/job_store.py:DynamoJobStore — changing either here breaks every

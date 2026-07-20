@@ -10,6 +10,8 @@ const POLL_MS = 1000;
 const STALL_POLLS = 20;
 /** Consecutive poll failures before we call the backend dead. */
 const DEAD_POLLS = 10;
+/** Re-submit a durable queued launch intent at this polling cadence. */
+const LAUNCH_RETRY_POLLS = 5;
 
 export interface LogLine {
   time: string;
@@ -64,6 +66,7 @@ export function useJob() {
   const lastProgress = useRef<string>('');
   const unchanged = useRef(0);
   const failures = useRef(0);
+  const queuedPolls = useRef(0);
   /** A poll is awaiting a response; the next interval tick must not start another. */
   const inFlight = useRef(false);
   /**
@@ -128,6 +131,25 @@ export function useJob() {
         const job = await api.getJob(jobId);
         failures.current = 0;
 
+        if (job.status === 'queued') {
+          queuedPolls.current += 1;
+          if (queuedPolls.current >= LAUNCH_RETRY_POLLS) {
+            queuedPolls.current = 0;
+            try {
+              // The server ignores this AI value for queued jobs and reuses the
+              // exact persisted launch input. Standard Step Functions starts are
+              // idempotent on that name+input pair, so this heals a Lambda crash
+              // between committing `queued` and calling StartExecution.
+              await api.startJob(jobId, false);
+            } catch {
+              // The durable intent remains queued. A later poll retries it; the
+              // ordinary status response below still updates the operator now.
+            }
+          }
+        } else {
+          queuedPolls.current = 0;
+        }
+
         if (job.progress && job.progress !== lastProgress.current) {
           lastProgress.current = job.progress;
           // This poll is the first of the run that reported this message, so the
@@ -188,6 +210,7 @@ export function useJob() {
       stopPolling();
       failures.current = 0;
       unchanged.current = 0;
+      queuedPolls.current = 0;
       inFlight.current = false;
       // The new job's first progress message may be the same string the previous
       // job ended on. Carrying it over would make that message look unchanged —
@@ -347,6 +370,7 @@ export function useJob() {
     stopPolling();
     localStorage.removeItem(STORAGE_KEY);
     lastProgress.current = '';
+    queuedPolls.current = 0;
     setState(INITIAL);
   }, [stopPolling]);
 

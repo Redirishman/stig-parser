@@ -59,6 +59,13 @@ jobs:
             terraform -chdir="$dir" validate
           done
 
+      - name: Test private client-path contracts
+        run: |
+          terraform -chdir=infra/modules/network test
+          terraform -chdir=infra/modules/iam test
+          terraform -chdir=infra/modules/compute test
+          terraform -chdir=infra/modules/api test
+
   tflint:
     name: tflint
     runs-on: ubuntu-latest

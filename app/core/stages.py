@@ -6,6 +6,7 @@ bool indicating success, updating job status as it goes. Errors are captured
 into the job record (never raised out) so the orchestrator can branch on
 status rather than on exceptions.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,12 +22,16 @@ from app.core.pipeline import (
     export_stage,
     parse_stage,
 )
+from app.core.uploads import MAX_UPLOAD_BYTES
 
 log = logging.getLogger(__name__)
 
 INPUT_PREFIX = "jobs/{job_id}/input"
 FINDINGS_KEY = "jobs/{job_id}/findings.json"
 REPORT_KEY = "jobs/{job_id}/report.xlsx"
+
+_PARSE_COMPLETE_PHASES = frozenset({"parsed", "enriching", "exporting"})
+_EXPORT_INPUT_PHASES = frozenset({None, "parsed", "enriching", "exporting"})
 
 
 def _is_safe_name(name: str) -> bool:
@@ -43,6 +48,35 @@ def _is_safe_name(name: str) -> bool:
         and ".." not in name
         and not Path(name).is_absolute()
     )
+
+
+def _parse_already_succeeded(record: dict) -> bool:
+    return record.get("status") == "complete" or (
+        record.get("status") == "running"
+        and record.get("phase") in _PARSE_COMPLETE_PHASES
+    )
+
+
+def _record_stage_error(
+    jobs: JobStore,
+    job_id: str,
+    *,
+    phase: str,
+    message: str,
+) -> bool:
+    """Record an active stage error; return True if a newer stage already won."""
+    if jobs.transition(
+        job_id,
+        "error",
+        expected_fields={"phase": phase},
+        error=message,
+    ):
+        return False
+
+    record = jobs.get(job_id)
+    if phase == "parsing":
+        return _parse_already_succeeded(record)
+    return record.get("status") == "complete"
 
 
 def run_parse_stage(
@@ -66,50 +100,98 @@ def run_parse_stage(
     """
     source = input_store or store
     work_dir = Path(work_dir)
+
+    # A Lambda retry may re-enter after the first invocation already moved the
+    # job to running. Confirm that state atomically in either case. A cancelled
+    # job stops here, before any upload is read or local work directory created.
+    if not jobs.transition(
+        job_id, "running", progress="Parsing files…", phase="parsing"
+    ):
+        record = jobs.get(job_id)
+        if _parse_already_succeeded(record):
+            return True
+        phase = record.get("phase")
+        if record.get("status") != "running" or phase not in {None, "parsing"}:
+            return False
+        if not jobs.update_if_status(
+            job_id,
+            {"running"},
+            expected_fields={"phase": phase},
+            progress="Parsing files…",
+            phase="parsing",
+        ):
+            return _parse_already_succeeded(jobs.get(job_id))
+
     input_dir = work_dir / "input"
     extract_dir = work_dir / "extract"
     input_dir.mkdir(parents=True, exist_ok=True)
-
-    jobs.update(job_id, status="running", progress="Parsing files…")
 
     # Validate up front: reject any filename that could traverse out of the
     # job work directory when joined onto a local path.
     for name in input_filenames:
         if not _is_safe_name(name):
             log.warning("rejected unsafe input filename for job %s: %r", job_id, name)
-            jobs.update(job_id, status="error", error="Invalid input filename.")
-            return False
+            return _record_stage_error(
+                jobs,
+                job_id,
+                phase="parsing",
+                message="Invalid input filename.",
+            )
 
     prefix = INPUT_PREFIX.format(job_id=job_id)
     try:
         local_inputs: list[Path] = []
         for name in input_filenames:
+            key = f"{prefix}/{name}"
+            # Enforce the per-file cap server-side. The presigned-PUT upload path
+            # cannot bound object size, so a client can PUT an arbitrarily large
+            # object; check the size (cheap HEAD) before pulling it into the
+            # size-limited Lambda /tmp. The Flask path enforces this at upload.
+            obj_size = source.size(key)
+            if obj_size > MAX_UPLOAD_BYTES:
+                log.warning(
+                    "rejected oversized upload for job %s: %r (%d bytes)",
+                    job_id,
+                    name,
+                    obj_size,
+                )
+                return _record_stage_error(
+                    jobs,
+                    job_id,
+                    phase="parsing",
+                    message=f"File too large: {name!r} (max 200 MB each).",
+                )
             dest = input_dir / name
-            source.download_to(f"{prefix}/{name}", dest)
+            source.download_to(key, dest)
             local_inputs.append(dest)
         result = parse_stage(local_inputs, [], extract_dir)
     except PipelineError as exc:
         # PipelineError messages are curated and user-safe.
-        jobs.update(job_id, status="error", error=str(exc))
-        return False
+        return _record_stage_error(jobs, job_id, phase="parsing", message=str(exc))
     except Exception:  # unexpected — capture without leaking internal detail
         log.exception("parse stage failed for job %s", job_id)
-        jobs.update(
-            job_id, status="error", error="Parsing failed — see server logs."
+        return _record_stage_error(
+            jobs,
+            job_id,
+            phase="parsing",
+            message="Parsing failed — see server logs.",
         )
-        return False
 
     store.put_bytes(
         FINDINGS_KEY.format(job_id=job_id),
         findings_to_json(result.findings).encode("utf-8"),
     )
-    jobs.update(
+    if jobs.update_if_status(
         job_id,
+        {"running"},
+        expected_fields={"phase": "parsing"},
         progress="Parsed.",
+        phase="parsed",
         warnings=result.warnings,
         source_file_count=result.source_file_count,
-    )
-    return True
+    ):
+        return True
+    return _parse_already_succeeded(jobs.get(job_id))
 
 
 def run_export_stage(
@@ -124,10 +206,30 @@ def run_export_stage(
     Returns True on success. On failure sets job status to ``error`` and
     returns False.
     """
+    record = jobs.get(job_id)
+    if record.get("status") == "complete":
+        # A successful Lambda whose response was lost may be retried by Step
+        # Functions. Completion is idempotent; do not rebuild or reclassify it.
+        return True
+    phase = record.get("phase")
+    if record.get("status") != "running" or phase not in _EXPORT_INPUT_PHASES:
+        return False
+    if not jobs.update_if_status(
+        job_id,
+        {"running"},
+        expected_fields={"phase": phase},
+        progress="Generating Excel workbook…",
+        phase="exporting",
+    ):
+        # Another retry may have completed after the read above but before this
+        # guarded patch. Treat the authoritative terminal success as idempotent.
+        latest = jobs.get(job_id)
+        return latest.get("status") == "complete" or (
+            latest.get("status") == "running" and latest.get("phase") == "exporting"
+        )
+
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-
-    jobs.update(job_id, progress="Generating Excel workbook…")
 
     try:
         raw = store.get_bytes(FINDINGS_KEY.format(job_id=job_id)).decode("utf-8")
@@ -139,15 +241,22 @@ def run_export_stage(
         summary = compute_summary(findings, source_file_count)
     except Exception:  # unexpected — capture without leaking internal detail
         log.exception("export stage failed for job %s", job_id)
-        jobs.update(
-            job_id, status="error", error="Export failed — see server logs."
+        return _record_stage_error(
+            jobs,
+            job_id,
+            phase="exporting",
+            message="Export failed — see server logs.",
         )
-        return False
 
-    jobs.update(
+    if jobs.transition(
         job_id,
-        status="complete",
+        "complete",
+        expected_fields={"phase": "exporting"},
         progress=f"Done — {len(findings)} findings exported.",
         summary=summary,
-    )
-    return True
+    ):
+        return True
+
+    # A concurrent duplicate exporter may have committed the same terminal
+    # state first. Cancellation and error remain failures and are never changed.
+    return jobs.get(job_id).get("status") == "complete"

@@ -10,9 +10,9 @@
 #   * artifact keys are derived from jobId alone (jobs/<id>/findings.json,
 #     jobs/<id>/report.xlsx), so a second write OVERWRITES; nothing appends or
 #     suffixes, so a retry cannot produce a second, divergent report.
-#   * job-status writes converge: DynamoJobStore puts the whole record, and the
-#     stages are strictly sequential (one writer at a time), so last-write-wins
-#     lands on the same state a first-time run would have reached.
+#   * job-status writes converge: DynamoJobStore guards each legal transition
+#     with optimistic versioning. Stage retries may repeat artifact writes, but
+#     cannot overwrite a concurrent cancellation or another terminal state.
 # This is what makes the Retry blocks below safe to have at all.
 
 locals {

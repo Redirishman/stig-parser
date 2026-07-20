@@ -5,10 +5,12 @@ is the translation layer — that a failed stage becomes a raised exception (so
 Step Functions' Catch fires rather than the job silently reporting success),
 and that the API handler enforces the upload allow-list and the AI gate.
 """
+
 import json
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from app.core.job_store import DynamoJobStore
@@ -45,6 +47,7 @@ def aws(monkeypatch):
         monkeypatch.delenv("BEDROCK_MODEL_ID", raising=False)
         monkeypatch.delenv("AI_KILLSWITCH_PARAM", raising=False)
         monkeypatch.delenv("IDENTITY_HEADER", raising=False)
+        monkeypatch.delenv("S3_PRESIGN_ENDPOINT_URL", raising=False)
         yield
 
 
@@ -66,7 +69,9 @@ class TestCommon:
         item = client.get_item(TableName=TABLE, Key={"job_id": {"S": "no-ttl"}})["Item"]
         assert "expiresAt" not in item
 
-        DynamoJobStore(TABLE, region=REGION, ttl_days=30).create("ttl", status="pending")
+        DynamoJobStore(TABLE, region=REGION, ttl_days=30).create(
+            "ttl", status="pending"
+        )
         item = client.get_item(TableName=TABLE, Key={"job_id": {"S": "ttl"}})["Item"]
         assert int(item["expiresAt"]["N"]) > 0
 
@@ -78,7 +83,7 @@ class TestCommon:
 class TestStageHandlers:
     def test_parse_stage_failure_raises(self, aws, jobs):
         """A stage returning False must not look like success to Step Functions."""
-        jobs.create("job1", status="pending")
+        jobs.create("job1", status="queued")
         # No input object was ever uploaded, so the download fails.
         with pytest.raises(common.StageFailed):
             parser.handler({"jobId": "job1", "inputFilenames": ["scan.xml"]}, None)
@@ -196,11 +201,366 @@ class TestApiJobs:
         )
 
         assert resp["statusCode"] == 202
-        # Named for the job so a double-submit is rejected by Step Functions
-        # rather than running the pipeline twice.
+        # Name + canonical input form the Standard-workflow idempotency key, so
+        # a double-submit resumes the same execution instead of starting two.
         assert calls[0]["name"] == "job1"
         assert json.loads(calls[0]["input"])["inputFilenames"] == ["scan.xml"]
         assert jobs.get("job1")["status"] == "queued"
+
+    def test_owner_can_start_their_job(self, aws, jobs, monkeypatch):
+        calls = []
+        self._start(monkeypatch, calls)
+        monkeypatch.setenv("IDENTITY_HEADER", "x-forwarded-user")
+        jobs.create(
+            "job1",
+            status="pending",
+            input_filenames=["scan.xml"],
+            submitted_by="owner@example.mil",
+        )
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "headers": {"X-Forwarded-User": "owner@example.mil"},
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert len(calls) == 1
+        assert jobs.get("job1")["status"] == "queued"
+
+    def test_owner_can_resume_their_queued_job(self, aws, jobs, monkeypatch):
+        calls = []
+        self._start(monkeypatch, calls)
+        monkeypatch.setenv("IDENTITY_HEADER", "x-forwarded-user")
+        launch_input = json.dumps(
+            {
+                "jobId": "job1",
+                "inputFilenames": ["scan.xml"],
+                "aiEnabled": False,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        jobs.create(
+            "job1",
+            status="queued",
+            input_filenames=["scan.xml"],
+            submitted_by="owner@example.mil",
+            ai="disabled-globally",
+            execution_input=launch_input,
+        )
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "headers": {"X-Forwarded-User": "owner@example.mil"},
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert calls[0]["input"] == launch_input
+
+    @pytest.mark.parametrize(
+        ("status", "headers"),
+        [
+            pytest.param(
+                "pending",
+                {"X-Forwarded-User": "other@example.mil"},
+                id="different-owner",
+            ),
+            pytest.param("queued", {}, id="missing-identity"),
+        ],
+    )
+    def test_non_owner_cannot_start_or_resume_job(
+        self, aws, jobs, monkeypatch, status, headers
+    ):
+        calls = []
+        self._start(monkeypatch, calls)
+        monkeypatch.setenv("IDENTITY_HEADER", "x-forwarded-user")
+        queued_fields = {"ai": "disabled-globally"} if status == "queued" else {}
+        jobs.create(
+            "job1",
+            status=status,
+            input_filenames=["scan.xml"],
+            submitted_by="owner@example.mil",
+            **queued_fields,
+        )
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "headers": headers,
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 404
+        assert json.loads(resp["body"]) == {"error": "Unknown job."}
+        assert calls == []
+        record = jobs.get("job1")
+        assert record["status"] == status
+        assert "execution_input" not in record
+
+    def test_legacy_unowned_job_remains_startable(self, aws, jobs, monkeypatch):
+        calls = []
+        self._start(monkeypatch, calls)
+        monkeypatch.setenv("IDENTITY_HEADER", "x-forwarded-user")
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "headers": {"X-Forwarded-User": "operator@example.mil"},
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert len(calls) == 1
+        assert jobs.get("job1")["status"] == "queued"
+
+    def test_queued_launch_intent_is_resumable_with_exact_same_input(
+        self, aws, jobs, monkeypatch
+    ):
+        """A crash after queueing but before StartExecution must be recoverable."""
+        calls = []
+        self._start(monkeypatch, calls)
+        launch_input = json.dumps(
+            {
+                "jobId": "job1",
+                "inputFilenames": ["scan.xml"],
+                "aiEnabled": False,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        jobs.create(
+            "job1",
+            status="queued",
+            input_filenames=["scan.xml"],
+            ai="disabled-globally",
+            execution_input=launch_input,
+        )
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1", "ai": True}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert calls[0]["input"] == launch_input
+        assert jobs.get("job1")["status"] == "queued"
+
+    def test_uncertain_start_is_retried_with_same_idempotency_key(
+        self, aws, jobs, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws-us-gov:states:::sm")
+        calls = []
+
+        class FakeSfn:
+            def start_execution(self, **kwargs):
+                calls.append(kwargs)
+                if len(calls) == 1:
+                    raise RuntimeError("connection dropped after send")
+                return {"executionArn": "arn:aws-us-gov:states:::exec"}
+
+        real_client = boto3.client
+        monkeypatch.setattr(
+            api.boto3,
+            "client",
+            lambda service, **kwargs: (
+                FakeSfn()
+                if service == "stepfunctions"
+                else real_client(service, **kwargs)
+            ),
+        )
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert len(calls) == 2
+        assert calls[0]["name"] == calls[1]["name"] == "job1"
+        assert calls[0]["input"] == calls[1]["input"]
+
+    def test_eventually_consistent_not_found_keeps_launch_queued(
+        self, aws, jobs, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws-us-gov:states:::sm")
+
+        class _ExecutionDoesNotExist(Exception):
+            pass
+
+        class FakeExceptions:
+            ExecutionDoesNotExist = _ExecutionDoesNotExist
+
+        class FakeSfn:
+            exceptions = FakeExceptions()
+
+            def start_execution(self, **kwargs):
+                raise RuntimeError("not accepted")
+
+            def describe_execution(self, **kwargs):
+                raise _ExecutionDoesNotExist()
+
+        real_client = boto3.client
+        monkeypatch.setattr(
+            api.boto3,
+            "client",
+            lambda service, **kwargs: (
+                FakeSfn()
+                if service == "stepfunctions"
+                else real_client(service, **kwargs)
+            ),
+        )
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert jobs.get("job1")["status"] == "queued"
+
+    def test_legacy_running_execution_is_recovered_without_reclassification(
+        self, aws, jobs, monkeypatch
+    ):
+        monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws-us-gov:states:::sm")
+        calls = []
+
+        class _ExecutionDoesNotExist(Exception):
+            pass
+
+        class FakeExceptions:
+            ExecutionDoesNotExist = _ExecutionDoesNotExist
+
+        class FakeSfn:
+            exceptions = FakeExceptions()
+
+            def start_execution(self, **kwargs):
+                calls.append(kwargs)
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "ExecutionAlreadyExists",
+                            "Message": "same name is already running",
+                        }
+                    },
+                    "StartExecution",
+                )
+
+            def describe_execution(self, **kwargs):
+                return {"status": "RUNNING"}
+
+        real_client = boto3.client
+        monkeypatch.setattr(
+            api.boto3,
+            "client",
+            lambda service, **kwargs: (
+                FakeSfn()
+                if service == "stepfunctions"
+                else real_client(service, **kwargs)
+            ),
+        )
+        jobs.create(
+            "job1",
+            status="queued",
+            input_filenames=["scan.xml"],
+            ai="disabled-globally",
+        )
+        old_input = json.dumps(
+            {
+                "jobId": "job1",
+                "inputFilenames": ["scan.xml"],
+                "aiEnabled": False,
+            }
+        )
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 202
+        assert calls[0]["input"] == old_input
+        assert jobs.get("job1")["execution_input"] == old_input
+        assert jobs.get("job1")["status"] == "queued"
+
+    def test_cancel_during_start_stops_late_execution(self, aws, jobs, monkeypatch):
+        monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws-us-gov:states:::sm")
+        stops = []
+
+        class _ExecutionDoesNotExist(Exception):
+            pass
+
+        class FakeExceptions:
+            ExecutionDoesNotExist = _ExecutionDoesNotExist
+
+        class FakeSfn:
+            exceptions = FakeExceptions()
+
+            def start_execution(self, **kwargs):
+                assert jobs.transition("job1", "cancelled", progress="Cancelled.")
+                return {"executionArn": "arn:aws-us-gov:states:::exec"}
+
+            def stop_execution(self, **kwargs):
+                stops.append(kwargs)
+
+        real_client = boto3.client
+        monkeypatch.setattr(
+            api.boto3,
+            "client",
+            lambda service, **kwargs: (
+                FakeSfn()
+                if service == "stepfunctions"
+                else real_client(service, **kwargs)
+            ),
+        )
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 409
+        assert jobs.get("job1")["status"] == "cancelled"
+        assert len(stops) == 1
 
     def test_unknown_job_is_404(self, aws, monkeypatch):
         self._start(monkeypatch, [])
@@ -229,7 +589,7 @@ class TestApiJobs:
         jobs.create("job1", status="pending", input_filenames=["scan.xml"])
 
         # The cancel wins the race.
-        jobs.update("job1", status="cancelled", progress="Cancelled.")
+        jobs.transition("job1", "cancelled", progress="Cancelled.")
 
         resp = api.handler(
             {
@@ -244,6 +604,45 @@ class TestApiJobs:
         assert calls == []  # no execution started
         assert jobs.get("job1")["status"] == "cancelled"  # not flipped to queued
         assert "cancelled" in json.loads(resp["body"])["error"]
+
+    def test_cancel_winning_after_start_read_does_not_launch_execution(
+        self, aws, jobs, monkeypatch
+    ):
+        """Reproduce the vulnerable read/write interleaving deterministically."""
+        calls = []
+        self._start(monkeypatch, calls)
+        jobs.create("job1", status="pending", input_filenames=["scan.xml"])
+
+        class CancelBeforeQueue:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+                self._injected = False
+
+            def transition(self, job_id, to_status, **fields):
+                if to_status == "queued" and not self._injected:
+                    self._injected = True
+                    assert self._wrapped.transition(
+                        job_id, "cancelled", progress="Cancelled."
+                    )
+                return self._wrapped.transition(job_id, to_status, **fields)
+
+            def __getattr__(self, name):
+                return getattr(self._wrapped, name)
+
+        monkeypatch.setattr(api.common, "job_store", lambda: CancelBeforeQueue(jobs))
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs",
+                "body": json.dumps({"jobId": "job1"}),
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 409
+        assert calls == []
+        assert jobs.get("job1")["status"] == "cancelled"
 
     @pytest.mark.parametrize("status", ["complete", "error"])
     def test_settled_job_is_not_restarted(self, aws, jobs, monkeypatch, status):
@@ -454,6 +853,16 @@ class TestMarkError:
 
         assert "Traceback" not in jobs.get("job1")["error"]
 
+    def test_cancelled_job_is_not_reclassified_as_error(self, aws, jobs):
+        jobs.create("job1", status="cancelled", progress="Cancelled.")
+
+        mark_error.handler({"jobId": "job1", "error": {"Cause": "StageFailed"}}, None)
+
+        assert jobs.get("job1") == {
+            "status": "cancelled",
+            "progress": "Cancelled.",
+        }
+
 
 class TestAiGateSettles:
     def _seed_findings(self, job_id="job1"):
@@ -479,11 +888,26 @@ class TestAiGateSettles:
             Body=findings_to_json([finding]).encode("utf-8"),
         )
 
-    def test_unresolved_gate_becomes_failed_not_silently_requested(self, aws, jobs):
+    def test_unresolved_gate_becomes_failed_before_completion(
+        self, aws, jobs, monkeypatch
+    ):
         """If the enricher dies hard, `ai` would still read `requested` on a
         finished job — which reads as 'AI ran' to the UI."""
         jobs.create("job1", status="running", ai="requested", source_file_count=1)
         self._seed_findings()
+
+        class AssertSettledBeforeComplete:
+            def transition(self, job_id, to_status, **fields):
+                if to_status == "complete":
+                    assert jobs.get(job_id)["ai"] == "failed"
+                return jobs.transition(job_id, to_status, **fields)
+
+            def __getattr__(self, name):
+                return getattr(jobs, name)
+
+        monkeypatch.setattr(
+            exporter.common, "job_store", lambda: AssertSettledBeforeComplete()
+        )
 
         exporter.handler({"jobId": "job1"}, None)
 
@@ -536,7 +960,14 @@ class TestApiConfig:
 
 
 class TestApiCancel:
-    def _fake_sfn(self, monkeypatch, calls, raises=None, raise_missing=False):
+    def _fake_sfn(
+        self,
+        monkeypatch,
+        calls,
+        raises=None,
+        raise_missing=False,
+        on_stop=None,
+    ):
         monkeypatch.setenv(
             "STATE_MACHINE_ARN",
             "arn:aws-us-gov:states:us-gov-west-1:111111111111:stateMachine:stig",
@@ -556,6 +987,8 @@ class TestApiCancel:
 
             def stop_execution(self, **kwargs):
                 calls.append(kwargs)
+                if on_stop:
+                    on_stop()
                 if raise_missing:
                     # Must be raised from THIS fake's class — the handler catches
                     # sfn.exceptions.ExecutionDoesNotExist off the same client.
@@ -634,6 +1067,32 @@ class TestApiCancel:
 
         assert resp["statusCode"] == 200
         assert jobs.get("job1")["status"] == "cancelled"
+
+    def test_completion_winning_during_stop_reports_actual_status(
+        self, aws, jobs, monkeypatch
+    ):
+        calls = []
+        jobs.create("job1", status="running")
+        self._fake_sfn(
+            monkeypatch,
+            calls,
+            on_stop=lambda: jobs.transition(
+                "job1", "complete", progress="Done.", summary={"findings": 1}
+            ),
+        )
+
+        resp = api.handler(
+            {
+                "httpMethod": "POST",
+                "resource": "/jobs/{job_id}/cancel",
+                "pathParameters": {"job_id": "job1"},
+            },
+            None,
+        )
+
+        assert resp["statusCode"] == 200
+        assert json.loads(resp["body"])["status"] == "complete"
+        assert jobs.get("job1")["status"] == "complete"
 
     def test_unknown_job_is_404(self, aws, monkeypatch):
         self._fake_sfn(monkeypatch, [])
