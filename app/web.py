@@ -323,6 +323,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
                 error=str(exc),
                 warnings=list(warnings),
             )
+            _purge_job_files(job_id)
             return
 
         warnings.extend(result.warnings)
@@ -345,7 +346,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
 
     except _JobCancelled:
         # Keep the job entry so status polls see "cancelled"; drop the files.
-        shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+        _purge_job_files(job_id)
         _set_job(job_id, status="cancelled", progress="Cancelled.", warnings=list(warnings))
     except Exception:
         # Never surface internal exception detail to the client (leaks paths,
@@ -357,6 +358,7 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             error="Processing failed — see server logs.",
             warnings=list(warnings),
         )
+        _purge_job_files(job_id)
     finally:
         logging.getLogger("app").removeHandler(log_handler)
 
@@ -384,8 +386,23 @@ def _delete_job(job_id: str) -> None:
         _jobs.pop(job_id, None)
 
 
+def _purge_job_files(job_id: str) -> None:
+    """Remove a job's on-disk working dir, keeping its in-memory status entry.
+
+    Used on the error and cancel paths: the files are useless once a job fails
+    (no output workbook is produced), but status polls still need the job entry
+    to report the terminal state. Only a successful download hits _delete_job.
+    """
+    shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+
+
 def _sweep_orphaned_jobs() -> None:
-    """Delete job temp dirs older than _ORPHAN_MAX_AGE_HOURS on app startup."""
+    """Delete job temp dirs older than _ORPHAN_MAX_AGE_HOURS.
+
+    Reaps two classes of orphan: dirs left by a previous process (run once at
+    startup) and dirs from completed jobs the user never downloaded (reaped by
+    the periodic sweeper on a long-lived server).
+    """
     if not _TEMP_DIR.exists():
         _TEMP_DIR.mkdir(parents=True, exist_ok=True)
         return
@@ -400,6 +417,32 @@ def _sweep_orphaned_jobs() -> None:
                 pass
 
 
+_SWEEP_INTERVAL_SECONDS = 30 * 60  # periodic orphan sweep cadence
+
+
+def _start_orphan_sweeper(interval_seconds: float = _SWEEP_INTERVAL_SECONDS) -> threading.Thread:
+    """Run _sweep_orphaned_jobs() on a loop in a daemon thread.
+
+    The startup sweep only reaps orphans from a prior process. A long-lived
+    server must also reap jobs abandoned during its own uptime — chiefly
+    completed jobs the user never downloaded — without waiting for a restart.
+    Started from the __main__ entrypoint only, so create_app() stays free of
+    background threads (tests build many apps per process).
+    """
+    def _loop() -> None:
+        while True:
+            time.sleep(interval_seconds)
+            try:
+                _sweep_orphaned_jobs()
+            except Exception:
+                log.exception("Periodic orphan sweep failed")
+
+    thread = threading.Thread(target=_loop, name="orphan-sweeper", daemon=True)
+    thread.start()
+    return thread
+
+
 if __name__ == "__main__":
     app = create_app()
+    _start_orphan_sweeper()
     app.run(debug=False, host="127.0.0.1", port=5000)

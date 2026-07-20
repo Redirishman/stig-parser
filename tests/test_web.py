@@ -302,3 +302,68 @@ class TestSecurityHeaders:
         # Strict CSP forbids inline JS — the page must load app.js externally.
         r = client.get("/")
         assert b"/static/app.js" in r.data
+
+
+# ---------------------------------------------------------------------------
+# Temp-dir cleanup (orphan reaping)
+# ---------------------------------------------------------------------------
+
+class TestJobCleanup:
+    def test_errored_job_purges_its_dir(self, client, tmp_path):
+        # A file that parses as XML-ish but yields no findings -> job errors.
+        data = {"results": (io.BytesIO(b"<broken"), "bad.xml")}
+        r = client.post("/api/process", data=data, content_type="multipart/form-data")
+        assert r.status_code == 200
+        job_id = r.get_json()["job_id"]
+
+        final = _wait_for_completion(client, job_id)
+        assert final["status"] == "error"
+
+        # Status entry survives (poll returned "error"), but on-disk files are gone.
+        job_dir = tmp_path / "jobs" / job_id
+        assert not job_dir.exists()
+
+    def test_sweep_removes_old_dirs_keeps_fresh(self, tmp_path, monkeypatch):
+        import importlib
+        import os
+        monkeypatch.setenv("STIG_TEMP_DIR", str(tmp_path / "jobs"))
+        import app.web as web_module
+        importlib.reload(web_module)
+
+        temp_dir = tmp_path / "jobs"
+        temp_dir.mkdir(parents=True)
+        old = temp_dir / "old-job"
+        fresh = temp_dir / "fresh-job"
+        old.mkdir()
+        fresh.mkdir()
+
+        # Age the old dir past the orphan cutoff.
+        stale = time.time() - (web_module._ORPHAN_MAX_AGE_HOURS + 1) * 3600
+        os.utime(old, (stale, stale))
+
+        web_module._sweep_orphaned_jobs()
+
+        assert not old.exists()
+        assert fresh.exists()
+
+    def test_start_orphan_sweeper_runs_sweep(self, tmp_path, monkeypatch):
+        import importlib
+        import os
+        monkeypatch.setenv("STIG_TEMP_DIR", str(tmp_path / "jobs"))
+        import app.web as web_module
+        importlib.reload(web_module)
+
+        temp_dir = tmp_path / "jobs"
+        temp_dir.mkdir(parents=True)
+        old = temp_dir / "old-job"
+        old.mkdir()
+        stale = time.time() - (web_module._ORPHAN_MAX_AGE_HOURS + 1) * 3600
+        os.utime(old, (stale, stale))
+
+        # A tiny interval means the daemon sweeps almost immediately.
+        web_module._start_orphan_sweeper(interval_seconds=0.05)
+
+        deadline = time.time() + 5.0
+        while old.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        assert not old.exists()
