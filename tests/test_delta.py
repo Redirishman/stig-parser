@@ -72,6 +72,7 @@ class TestCoverageScoping:
         assert [f.vuln_id for f in buckets["Resolved"]] == []
         assert result.only_baseline_hosts == {"SERVER02"}
         assert result.common_hosts == {"SERVER01"}
+        assert all(f.server != "SERVER02" for f in result.findings)
 
     def test_current_only_host_all_new(self):
         base = [_finding("V-1", "SERVER01")]
@@ -125,3 +126,92 @@ class TestEmptySets:
     def test_both_empty(self):
         result = compute_delta([], [])
         assert result.findings == []
+
+
+class TestBlankVulnIdIdentity:
+    def test_blank_vuln_id_findings_kept_distinct(self):
+        # vuln_id is blank when a rule can't be matched to a benchmark
+        # (matcher.py) or the source has no V-ID (Nessus non-DISA, CKLB
+        # without group_id). A naive (server, vuln_id) key would collapse
+        # all three baseline findings onto one dict slot and silently drop
+        # two of them. rule_id must be used as the tiebreaker.
+        base = [
+            _finding("", rule_id="SV-1_rule", status="Open"),
+            _finding("", rule_id="SV-2_rule", status="Open"),
+            _finding("", rule_id="SV-3_rule", status="Open"),
+        ]
+        curr = [
+            _finding("", rule_id="SV-1_rule", status="Open"),  # persists
+            _finding("", rule_id="SV-2_rule", status="Open"),  # persists
+            # SV-3_rule dropped -> resolved
+        ]
+        result = compute_delta(base, curr)
+        assert len(result.findings) == 3
+        buckets = _by_status(result)
+        assert len(buckets["Persisting"]) == 2
+        assert [f.rule_id for f in buckets["Resolved"]] == ["SV-3_rule"]
+
+    def test_duplicate_key_within_one_set_keeps_first_and_warns(self, caplog):
+        # Two findings on the same host with the same vuln_id (or both
+        # blank vuln_id + same rule_id) are a genuine key collision, not a
+        # dropped-finding scenario. Silent last-write-wins would hide it;
+        # the implementation should keep the first and log a warning.
+        import logging
+
+        base = [_finding("V-1")]
+        curr = [_finding("V-1"), _finding("V-1")]
+        with caplog.at_level(logging.WARNING):
+            result = compute_delta(base, curr)
+        assert len(result.findings) == 1
+        assert result.findings[0].delta_status == "Persisting"
+        assert any("duplicate" in rec.message.lower() for rec in caplog.records)
+
+
+class TestHostMatching:
+    def test_disjoint_hosts_hostname_mismatch(self):
+        base = [_finding("V-1", "A")]
+        curr = [_finding("V-1", "B")]
+        result = compute_delta(base, curr)
+        assert result.common_hosts == set()
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert len(buckets["New"]) == 1
+        assert buckets["New"][0].server == "B"
+
+    def test_case_insensitive_host_match(self):
+        base = [_finding("V-1", "SERVER01")]
+        curr = [_finding("V-1", "server01")]
+        result = compute_delta(base, curr)
+        assert len(result.common_hosts) == 1
+        buckets = _by_status(result)
+        assert len(buckets["Persisting"]) == 1
+        assert buckets["New"] == []
+        assert buckets["Resolved"] == []
+
+
+class TestResolvedRowData:
+    def test_resolved_row_carries_baseline_data(self):
+        base = [
+            Finding(
+                stig_title="Baseline STIG Title",
+                vuln_id="V-9",
+                rule_id="SV-9r1_rule",
+                severity="CAT I",
+                status="Open",
+                server="SERVER01",
+                ip_address="10.0.0.9",
+                check_text="baseline check text",
+                fix_text="baseline fix text",
+            )
+        ]
+        curr = [_finding("V-1", "SERVER01")]  # keeps SERVER01 in common hosts
+        result = compute_delta(base, curr)
+        resolved = [f for f in result.findings if f.delta_status == "Resolved"]
+        assert len(resolved) == 1
+        f = resolved[0]
+        assert f.stig_title == "Baseline STIG Title"
+        assert f.severity == "CAT I"
+        assert f.check_text == "baseline check text"
+        assert f.fix_text == "baseline fix text"
+        assert f.baseline_status == "Open"
+        assert f.current_status == ""
