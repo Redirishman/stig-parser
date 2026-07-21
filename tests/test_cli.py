@@ -345,6 +345,38 @@ class TestDeltaEndToEnd:
             for r in caplog.records
         ), "delta warnings were not surfaced by the CLI"
 
+    def test_parse_warnings_from_both_sides_are_logged(self, tmp_path, caplog):
+        """parse_stage warnings from BOTH scan sets must reach the operator.
+
+        Each set gets one unreadable XML file; the resulting warnings name
+        the offending file, so a drain that lost either the baseline or the
+        current half is detectable.
+        """
+        good = FIXTURES / "scc_results.xml"
+        bad_baseline = tmp_path / "bad_baseline.xml"
+        bad_current = tmp_path / "bad_current.xml"
+        for p in (bad_baseline, bad_current):
+            p.write_text("<TestResult><unclosed>", encoding="utf-8")
+
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(good), str(bad_baseline),
+                "--current", str(good), str(bad_current),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        # Only records the CLI itself emitted — the parsers log their own
+        # copies under different logger names.
+        cli_warnings = [r.message for r in caplog.records if r.name == "app.cli"]
+        assert any("bad_baseline.xml" in m for m in cli_warnings), (
+            f"baseline parse warnings not surfaced by the CLI: {cli_warnings}"
+        )
+        assert any("bad_current.xml" in m for m in cli_warnings), (
+            f"current parse warnings not surfaced by the CLI: {cli_warnings}"
+        )
+
     def test_missing_baseline_file_returns_1(self, tmp_path, caplog):
         """A nonexistent --baseline path fails cleanly, without a traceback."""
         out = tmp_path / "delta.xlsx"
