@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
-from app.cli import _build_parser, _resolve_paths, main
+from app.cli import _build_parser, _normalize_argv, _resolve_paths, main
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -20,41 +20,83 @@ class TestArgumentParsing:
     def test_results_is_required(self):
         parser = _build_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args([])
+            parser.parse_args(_normalize_argv([]))
 
     def test_benchmarks_is_optional(self):
         parser = _build_parser()
         # No --benchmarks flag at all — must not raise
-        args = parser.parse_args(["--results", "a.xml"])
+        args = parser.parse_args(_normalize_argv(["--results", "a.xml"]))
         assert args.benchmarks is None
 
     def test_benchmarks_accepts_empty_list(self):
         parser = _build_parser()
-        args = parser.parse_args(["--results", "a.xml", "--benchmarks"])
+        args = parser.parse_args(
+            _normalize_argv(["--results", "a.xml", "--benchmarks"])
+        )
         assert args.benchmarks == []
 
     def test_benchmarks_accepts_multiple_paths(self):
         parser = _build_parser()
         args = parser.parse_args(
-            ["--results", "a.xml", "b.xml", "--benchmarks", "x.xml", "y.zip"]
+            _normalize_argv(
+                ["--results", "a.xml", "b.xml", "--benchmarks", "x.xml", "y.zip"]
+            )
         )
         assert args.results == ["a.xml", "b.xml"]
         assert args.benchmarks == ["x.xml", "y.zip"]
 
     def test_output_flag_parsed(self):
         parser = _build_parser()
-        args = parser.parse_args(["--results", "a.xml", "--output", "out.xlsx"])
+        args = parser.parse_args(
+            _normalize_argv(["--results", "a.xml", "--output", "out.xlsx"])
+        )
         assert args.output == "out.xlsx"
 
     def test_verbose_flag_parsed(self):
         parser = _build_parser()
-        args = parser.parse_args(["--results", "a.xml", "--verbose"])
+        args = parser.parse_args(_normalize_argv(["--results", "a.xml", "--verbose"]))
         assert args.verbose is True
 
     def test_verbose_default_false(self):
         parser = _build_parser()
-        args = parser.parse_args(["--results", "a.xml"])
+        args = parser.parse_args(_normalize_argv(["--results", "a.xml"]))
         assert args.verbose is False
+
+
+class TestDeltaArgs:
+    def test_delta_subcommand_parses(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["delta", "--baseline", "a.xml", "--current", "b.xml"]
+        )
+        assert args.command == "delta"
+        assert args.baseline == ["a.xml"]
+        assert args.current == ["b.xml"]
+
+    def test_delta_accepts_benchmarks_and_output(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "delta", "--baseline", "a.xml", "--current", "b.xml",
+            "--benchmarks", "x.xml", "--output", "d.xlsx",
+        ])
+        assert args.benchmarks == ["x.xml"]
+        assert args.output == "d.xlsx"
+
+    def test_report_subcommand_parses(self):
+        parser = _build_parser()
+        args = parser.parse_args(["report", "--results", "a.xml"])
+        assert args.command == "report"
+        assert args.results == ["a.xml"]
+
+    def test_bare_results_still_works(self):
+        # Back-compat: no subcommand + --results routes to report
+        args = _normalize_argv(["--results", "a.xml"])
+        assert args[0] == "report"
+
+    def test_delta_requires_baseline_and_current(self):
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["delta", "--baseline", "a.xml"])
 
 
 # ---------------------------------------------------------------------------

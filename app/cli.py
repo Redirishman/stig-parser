@@ -37,25 +37,46 @@ def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> 
     return paths
 
 
+_SUBCOMMANDS = ("report", "delta")
+
+
+def _add_common_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--output",
+        metavar="FILE",
+        default=None,
+        help="Output Excel file path.",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable detailed logging output.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="stig-parser",
         description=(
-            "Parse XCCDF compliance scan results and STIG benchmark definitions, "
-            "then generate a consolidated Excel findings report."
+            "Parse XCCDF compliance scan results and STIG benchmark "
+            "definitions into a consolidated Excel findings report, or diff "
+            "two scan sets (delta)."
         ),
     )
-    p.add_argument(
+    sub = p.add_subparsers(dest="command")
+
+    rp = sub.add_parser("report", help="Single-run findings report.")
+    rp.add_argument(
         "--results",
         nargs="+",
         required=True,
         metavar="PATH",
         help=(
             "XCCDF results files (.xml) and/or Evaluate-STIG / STIG Viewer 3 "
-            "checklists (.cklb), or a directory (supports globs)."
+            "checklists (.cklb) / .nessus, or a directory (supports globs)."
         ),
     )
-    p.add_argument(
+    rp.add_argument(
         "--benchmarks",
         nargs="*",
         required=False,
@@ -66,23 +87,57 @@ def _build_parser() -> argparse.ArgumentParser:
             "Optional for SCC — result files already embed benchmark definitions."
         ),
     )
-    p.add_argument(
-        "--output",
-        metavar="FILE",
+    _add_common_flags(rp)
+
+    dp = sub.add_parser(
+        "delta", help="Diff a baseline scan set against a current one."
+    )
+    dp.add_argument(
+        "--baseline",
+        nargs="+",
+        required=True,
+        metavar="PATH",
+        help="Baseline (older) scan results — same formats as report --results.",
+    )
+    dp.add_argument(
+        "--current",
+        nargs="+",
+        required=True,
+        metavar="PATH",
+        help="Current (newer) scan results — same formats as report --results.",
+    )
+    dp.add_argument(
+        "--benchmarks",
+        nargs="*",
+        required=False,
         default=None,
-        help="Output Excel file path (default: stig_findings_<timestamp>.xlsx).",
+        metavar="PATH",
+        help="STIG benchmark XML/ZIP applied to BOTH sets (optional for SCC).",
     )
-    p.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable detailed logging output.",
-    )
+    _add_common_flags(dp)
+
     return p
+
+
+def _normalize_argv(argv: list[str]) -> list[str]:
+    """Inject an implicit ``report`` subcommand for back-compat.
+
+    Historically the CLI was invoked as ``stig-parser --results ...`` with no
+    subcommand. If the first token is not a known subcommand (and not a bare
+    ``-h``/``--help``), prepend ``report`` so old invocations keep working.
+    An empty argv is normalized too, so a bare ``stig-parser`` still fails
+    with the historical "--results is required" usage error rather than
+    falling through with ``command=None``.
+    """
+    if argv and (argv[0] in _SUBCOMMANDS or argv[0] in ("-h", "--help")):
+        return argv
+    return ["report", *argv]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(_normalize_argv(raw))
 
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
