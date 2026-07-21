@@ -4,8 +4,13 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
+from openpyxl.utils import get_column_letter
+
 from app.exporters.excel_exporter import (
     ExcelExporter,
+    _DELTA_COL_DELTA,
+    _DELTA_COL_SEVERITY,
+    _DELTA_COLS,
     _FORMULA_PREFIXES,
     _formula_quote,
     _sanitize_cell,
@@ -253,6 +258,85 @@ def test_export_delta_findings_sheet_has_delta_column(tmp_path):
     assert tags == {"New", "Resolved", "Persisting"}
 
 
+_EXPECTED_DELTA_HEADERS = [
+    "Delta", "STIG Title", "Vuln ID", "Rule ID", "Severity",
+    "Baseline Status", "Current Status", "Server", "IP Address",
+    "Check Text", "Fix Text",
+]
+
+
+def test_delta_findings_layout_header_and_row_order(tmp_path):
+    """Pin the whole 11-column layout — headers and the values beneath them."""
+    result = DeltaResult(
+        findings=[
+            _delta_finding(
+                "New",
+                vuln_id="V-9",
+                severity="CAT III",
+                baseline_status="Not Reviewed",
+                current_status="Open",
+            )
+        ],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Findings"]
+
+    ncols = len(_EXPECTED_DELTA_HEADERS)
+    assert [ws.cell(row=1, column=c).value for c in range(1, ncols + 1)] == (
+        _EXPECTED_DELTA_HEADERS
+    )
+    assert ws.cell(row=1, column=ncols + 1).value is None, "unexpected extra column"
+    assert [ws.cell(row=2, column=c).value for c in range(1, ncols + 1)] == [
+        "New", "Win2022 STIG", "V-9", "SV-1r1_rule", "CAT III",
+        "Not Reviewed", "Open", "SERVER01", "10.0.0.1", "check", "fix",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("header", "constant"),
+    [("Delta", _DELTA_COL_DELTA), ("Severity", _DELTA_COL_SEVERITY)],
+)
+def test_delta_summary_countifs_columns_track_layout(header, constant):
+    """The Delta Summary COUNTIFS address the Findings sheet by column letter.
+
+    If a future edit reorders or inserts into _DELTA_COLS without updating the
+    matching _DELTA_COL_* constant, every count silently evaluates to 0 — the
+    workbook then shows an all-zero accreditation summary with no error. Derive
+    the letter from the layout so that drift cannot happen rather than merely
+    asserting today's values.
+    """
+    index = [h for h, _attr, _w in _DELTA_COLS].index(header)
+    assert get_column_letter(index + 1) == constant
+
+
+def test_delta_column_fill_per_status(tmp_path):
+    """Red must mean regression and green must mean remediated — a swap here
+    misreports remediation status to an accreditation reader."""
+    result = DeltaResult(
+        findings=[
+            _delta_finding("New", "V-1"),
+            _delta_finding("Resolved", "V-2", current_status=""),
+            _delta_finding("Persisting", "V-3"),
+        ],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Findings"]
+
+    fills = {
+        ws.cell(row=r, column=1).value: ws.cell(row=r, column=1).fill.start_color.rgb[-6:]
+        for r in range(2, ws.max_row + 1)
+    }
+    assert fills == {
+        "New": "FFC7CE",         # red-ish: regression
+        "Resolved": "C6EFCE",    # green: remediated
+        "Persisting": "FFEB9C",  # amber: still open
+    }
+
+
 def test_export_delta_sanitizes_formula_injection(tmp_path):
     evil = DeltaFinding(
         stig_title="=cmd()",
@@ -366,7 +450,8 @@ def test_export_delta_summary_renders_warnings(tmp_path):
     """The workbook outlives the CLI run, so warnings must be durable in it."""
     warning = (
         "Baseline and current scans have different Vuln-ID coverage on hosts "
-        "common to both runs (0% vs 40% of findings missing a Vuln-ID) — "
+        "common to both runs (0% vs 40% of findings missing a Vuln-ID) — this "
+        "usually means --benchmarks was supplied for only one run. "
         "Resolved/New counts on those hosts may be unreliable."
     )
     result = DeltaResult(
@@ -380,9 +465,13 @@ def test_export_delta_summary_renders_warnings(tmp_path):
     ws = load_workbook(out)["Summary"]
     col1 = _summary_col1(ws)
     assert "Warnings" in col1
-    assert warning in col1
-    # A long warning must not blow the label column out past the 60 cap.
-    assert ws.column_dimensions["A"].width <= 60
+    assert warning in col1, "warning text must be stored whole, not truncated"
+    # Falsifiable width guard: this warning is far longer than the column cap,
+    # so without the cap the measured width would track its full length. (A
+    # `<= 60` assertion would be unfalsifiable — the footer note already pins
+    # column A at exactly 60 whether or not any warning exists.)
+    assert len(warning) > 60
+    assert ws.column_dimensions["A"].width < len(warning)
 
 
 def test_export_delta_summary_omits_warnings_block_when_clean(tmp_path):

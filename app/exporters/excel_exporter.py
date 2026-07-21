@@ -42,15 +42,20 @@ _FILL_CAT_II = PatternFill("solid", fgColor="FFEB9C")
 _FILL_CAT_III = PatternFill("solid", fgColor="C6EFCE")
 _SEVERITY_FILL = {"CAT I": _FILL_CAT_I, "CAT II": _FILL_CAT_II, "CAT III": _FILL_CAT_III}
 
-# Delta-status fills (delta findings sheet "Delta" column). The keys are
-# unpacked from DELTA_STATUSES (app/processors/delta.py) rather than repeated
-# as literals, so this exporter cannot silently drift from the delta module:
-# a change to that tuple's shape fails loudly here at import time.
-_STATUS_NEW, _STATUS_RESOLVED, _STATUS_PERSISTING = DELTA_STATUSES
+# Delta-status fills (delta findings sheet "Delta" column). Colours are keyed
+# by status NAME, never by position in DELTA_STATUSES: reordering that tuple
+# must not swap remediated-green onto a regression. Building the fill map by
+# iterating DELTA_STATUSES (app/processors/delta.py) means a status that is
+# renamed or added there raises KeyError at import time rather than silently
+# rendering with no fill.
+_DELTA_STATUS_COLOR = {
+    "New":        "FFC7CE",  # red-ish: regression
+    "Resolved":   "C6EFCE",  # green: remediated
+    "Persisting": "FFEB9C",  # amber: still open
+}
 _DELTA_FILL = {
-    _STATUS_NEW:        PatternFill("solid", fgColor="FFC7CE"),  # red-ish: regression
-    _STATUS_RESOLVED:   PatternFill("solid", fgColor="C6EFCE"),  # green: remediated
-    _STATUS_PERSISTING: PatternFill("solid", fgColor="FFEB9C"),  # amber: still open
+    status: PatternFill("solid", fgColor=_DELTA_STATUS_COLOR[status])
+    for status in DELTA_STATUSES
 }
 
 _HEADER_FONT = Font(name="Arial", size=10, bold=True)
