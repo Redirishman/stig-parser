@@ -352,3 +352,63 @@ def test_export_delta_summary_counts_by_status(tmp_path):
     }
     assert "Delta Summary" in labels
     assert "New" in labels and "Resolved" in labels and "Persisting" in labels
+
+
+def _summary_col1(ws) -> list[str]:
+    return [
+        str(ws.cell(row=r, column=1).value)
+        for r in range(1, ws.max_row + 1)
+        if ws.cell(row=r, column=1).value is not None
+    ]
+
+
+def test_export_delta_summary_renders_warnings(tmp_path):
+    """The workbook outlives the CLI run, so warnings must be durable in it."""
+    warning = (
+        "Baseline and current scans have different Vuln-ID coverage on hosts "
+        "common to both runs (0% vs 40% of findings missing a Vuln-ID) — "
+        "Resolved/New counts on those hosts may be unreliable."
+    )
+    result = DeltaResult(
+        findings=[_delta_finding("Persisting", "V-1")],
+        common_hosts={"SERVER01"},
+        warnings=[warning],
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+
+    ws = load_workbook(out)["Summary"]
+    col1 = _summary_col1(ws)
+    assert "Warnings" in col1
+    assert warning in col1
+    # A long warning must not blow the label column out past the 60 cap.
+    assert ws.column_dimensions["A"].width <= 60
+
+
+def test_export_delta_summary_omits_warnings_block_when_clean(tmp_path):
+    """A clean run shouldn't show an empty heading implying something failed."""
+    result = DeltaResult(
+        findings=[_delta_finding("Persisting", "V-1")],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+
+    ws = load_workbook(out)["Summary"]
+    assert "Warnings" not in _summary_col1(ws)
+
+
+def test_export_delta_summary_sanitizes_warning_text(tmp_path):
+    """Warning text embeds scan-derived hostnames, so it is attacker-influenced."""
+    result = DeltaResult(
+        findings=[_delta_finding("Persisting", "V-1")],
+        common_hosts={"SERVER01"},
+        warnings=['=HYPERLINK("http://evil") duplicate finding'],
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+
+    ws = load_workbook(out)["Summary"]
+    col1 = _summary_col1(ws)
+    assert '\'=HYPERLINK("http://evil") duplicate finding' in col1
+    assert '=HYPERLINK("http://evil") duplicate finding' not in col1

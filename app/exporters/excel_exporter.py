@@ -96,7 +96,6 @@ _DELTA_COLS: list[tuple[str, str, int]] = [
 # Delta findings sheet column letters (for Summary COUNTIFS)
 _DELTA_COL_DELTA    = "A"   # col 1
 _DELTA_COL_SEVERITY = "E"   # col 5
-_DELTA_COL_SERVER   = "H"   # col 8
 
 
 class ExcelExporter:
@@ -393,6 +392,20 @@ class ExcelExporter:
             b(row, 2, _sanitize_cell(host))
             row += 1
         row += 1  # spacer
+
+        # ── Table 3: Warnings ─────────────────────────────────────────
+        # The CLI also prints these, but terminal output is gone by the time
+        # someone opens this workbook for accreditation months later — and the
+        # coverage warning specifically says Resolved counts may be unreliable.
+        # Omitted entirely on a clean run so an empty heading never implies
+        # something went wrong.
+        if delta.warnings:
+            h(row, 1, "Warnings")
+            row += 1
+            for warning in delta.warnings:
+                b(row, 1, _sanitize_cell(warning))
+                row += 1
+            row += 1  # spacer
 
         # ── Footer note ───────────────────────────────────────────────
         note = ws.cell(
