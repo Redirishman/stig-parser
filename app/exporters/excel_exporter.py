@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -9,9 +11,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.parsers.base import Finding
-from app.processors.delta import DELTA_STATUSES, DeltaResult
+from app.processors.delta import DELTA_STATUSES, DeltaFinding, DeltaResult
 
 log = logging.getLogger(__name__)
+
+# Sheet the Summary COUNTIFS/COUNTIF formulas address.
+_FINDINGS_SHEET = "Findings"
 
 # Excel/Calc treat a leading =, +, -, @, or control char as a formula.
 # Scan-derived text (hostname, check/fix text) is attacker-controllable, so
@@ -103,6 +108,94 @@ _DELTA_COL_DELTA    = "A"   # col 1
 _DELTA_COL_SEVERITY = "E"   # col 5
 
 
+def _h(ws, row: int, col: int, text):
+    """Write a header-styled cell."""
+    cell = ws.cell(row=row, column=col, value=text)
+    cell.font = _HEADER_FONT
+    return cell
+
+
+def _b(ws, row: int, col: int, value):
+    """Write a body-styled cell."""
+    cell = ws.cell(row=row, column=col, value=value)
+    cell.font = _BODY_FONT
+    return cell
+
+
+def _countifs2(col_a: str, crit_a: str, col_b: str, crit_b: str) -> str:
+    """A two-criteria COUNTIFS over the Findings sheet.
+
+    *crit_a* / *crit_b* must already be Excel string literals — pass
+    scan-derived values through ``_formula_quote`` (CWE-1236).
+    """
+    return (
+        f'=COUNTIFS({_FINDINGS_SHEET}!${col_a}:${col_a},{crit_a},'
+        f'{_FINDINGS_SHEET}!${col_b}:${col_b},{crit_b})'
+    )
+
+
+def _write_findings_sheet(
+    ws,
+    rows: Sequence[Finding | DeltaFinding],
+    cols: list[tuple[str, str, int]],
+    fills: dict[str, dict[str, PatternFill]],
+) -> None:
+    """Write a findings-style sheet: header row, one row per record, widths.
+
+    *cols* is a (header, attribute, max_width) layout; *fills* maps a header to
+    a value -> PatternFill lookup applied to that column's cells.
+
+    Shared by the single-run and delta reports so the invariants that have to
+    hold for both — every value through ``_sanitize_cell``, ``_WRAP_HEADERS``
+    honoured, widths measured off the first line — live in exactly one place
+    and cannot drift apart.
+    """
+    # Header row
+    for col_idx, (header, _attr, _mw) in enumerate(cols, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(vertical="center")
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}1"
+
+    # Data rows
+    for row_idx, record in enumerate(rows, start=2):
+        for col_idx, (header, attr, _mw) in enumerate(cols, start=1):
+            value = getattr(record, attr, "")
+            wrap = header in _WRAP_HEADERS
+            cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_cell(value))
+            cell.font = _BODY_FONT
+            cell.alignment = Alignment(
+                wrap_text=wrap,
+                vertical="top" if wrap else "center",
+            )
+            fill = fills.get(header, {}).get(value)
+            if fill:
+                cell.fill = fill
+
+    # Column widths — measure actual content, cap at max_width
+    for col_idx, (header, _attr, max_w) in enumerate(cols, start=1):
+        col_letter = get_column_letter(col_idx)
+        measured = len(header)
+        for row_idx in range(2, ws.max_row + 1):
+            val = ws.cell(row=row_idx, column=col_idx).value or ""
+            measured = max(measured, min(len(str(val).split("\n")[0]), max_w))
+        ws.column_dimensions[col_letter].width = min(measured + 2, max_w)
+
+
+def _autofit_summary(ws, ncols: int, last_row: int) -> None:
+    """Width summary columns 1..*ncols* to their widest non-formula content."""
+    for col_idx in range(1, ncols + 1):
+        col_letter = get_column_letter(col_idx)
+        max_len = 10
+        for r in range(1, last_row + 1):
+            val = ws.cell(row=r, column=col_idx).value or ""
+            if not str(val).startswith("="):
+                max_len = max(max_len, len(str(val)))
+        ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
+
+
 class ExcelExporter:
     """Generate an Excel workbook from a list of Finding objects."""
 
@@ -117,7 +210,9 @@ class ExcelExporter:
         wb = Workbook()
         findings_ws = wb.active
         findings_ws.title = "Findings"
-        self._write_findings(findings_ws, findings)
+        _write_findings_sheet(
+            findings_ws, findings, _FINDINGS_COLS, {"Severity": _SEVERITY_FILL}
+        )
 
         summary_ws = wb.create_sheet("Summary")
         self._write_summary(summary_ws, findings)
@@ -143,7 +238,12 @@ class ExcelExporter:
         wb = Workbook()
         findings_ws = wb.active
         findings_ws.title = "Findings"
-        self._write_delta_findings(findings_ws, delta)
+        _write_findings_sheet(
+            findings_ws,
+            delta.findings,
+            _DELTA_COLS,
+            {"Delta": _DELTA_FILL, "Severity": _SEVERITY_FILL},
+        )
 
         summary_ws = wb.create_sheet("Summary")
         self._write_delta_summary(summary_ws, delta)
@@ -153,111 +253,13 @@ class ExcelExporter:
         return output_path
 
     # ------------------------------------------------------------------
-    # Findings sheet
-    # ------------------------------------------------------------------
-
-    def _write_findings(self, ws, findings: list[Finding]) -> None:
-        # Header row
-        for col_idx, (header, _, _mw) in enumerate(_FINDINGS_COLS, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
-            cell.font = _HEADER_FONT
-            cell.alignment = Alignment(vertical="center")
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(_FINDINGS_COLS))}1"
-
-        # Data rows
-        for row_idx, finding in enumerate(findings, start=2):
-            for col_idx, (header, attr, _mw) in enumerate(_FINDINGS_COLS, start=1):
-                value = getattr(finding, attr, "")
-                wrap = header in _WRAP_HEADERS
-                cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_cell(value))
-                cell.font = _BODY_FONT
-                cell.alignment = Alignment(
-                    wrap_text=wrap,
-                    vertical="top" if wrap else "center",
-                )
-                if header == "Severity":
-                    fill = _SEVERITY_FILL.get(value)
-                    if fill:
-                        cell.fill = fill
-
-        # Column widths — measure actual content, cap at max_width
-        for col_idx, (header, attr, max_w) in enumerate(_FINDINGS_COLS, start=1):
-            col_letter = get_column_letter(col_idx)
-            measured = len(header)
-            for row_idx in range(2, ws.max_row + 1):
-                val = ws.cell(row=row_idx, column=col_idx).value or ""
-                measured = max(measured, min(len(str(val).split("\n")[0]), max_w))
-            ws.column_dimensions[col_letter].width = min(measured + 2, max_w)
-
-    # ------------------------------------------------------------------
-    # Delta findings sheet
-    # ------------------------------------------------------------------
-
-    def _write_delta_findings(self, ws, delta: DeltaResult) -> None:
-        # Header row
-        for col_idx, (header, _, _mw) in enumerate(_DELTA_COLS, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
-            cell.font = _HEADER_FONT
-            cell.alignment = Alignment(vertical="center")
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(_DELTA_COLS))}1"
-
-        # Data rows
-        for row_idx, finding in enumerate(delta.findings, start=2):
-            for col_idx, (header, attr, _mw) in enumerate(_DELTA_COLS, start=1):
-                value = getattr(finding, attr, "")
-                wrap = header in _WRAP_HEADERS
-                cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_cell(value))
-                cell.font = _BODY_FONT
-                cell.alignment = Alignment(
-                    wrap_text=wrap,
-                    vertical="top" if wrap else "center",
-                )
-                if header == "Delta":
-                    fill = _DELTA_FILL.get(value)
-                    if fill:
-                        cell.fill = fill
-                elif header == "Severity":
-                    fill = _SEVERITY_FILL.get(value)
-                    if fill:
-                        cell.fill = fill
-
-        # Column widths — measure actual content, cap at max_width
-        for col_idx, (header, attr, max_w) in enumerate(_DELTA_COLS, start=1):
-            col_letter = get_column_letter(col_idx)
-            measured = len(header)
-            for row_idx in range(2, ws.max_row + 1):
-                val = ws.cell(row=row_idx, column=col_idx).value or ""
-                measured = max(measured, min(len(str(val).split("\n")[0]), max_w))
-            ws.column_dimensions[col_letter].width = min(measured + 2, max_w)
-
-    # ------------------------------------------------------------------
     # Summary sheet
     # ------------------------------------------------------------------
 
     def _write_summary(self, ws, findings: list[Finding]) -> None:
-        f = "Findings"  # sheet reference prefix
         severities = ["CAT I", "CAT II", "CAT III"]
         statuses   = ["Open", "Not Reviewed", "Error", "Unknown"]
-
-        def countifs2(col_a: str, crit_a: str, col_b: str, crit_b: str) -> str:
-            return (
-                f'=COUNTIFS({f}!${col_a}:${col_a},{crit_a},'
-                f'{f}!${col_b}:${col_b},{crit_b})'
-            )
-
-        def h(ws, row, col, text):
-            c = ws.cell(row=row, column=col, value=text)
-            c.font = _HEADER_FONT
-            return c
-
-        def b(ws, row, col, value):
-            c = ws.cell(row=row, column=col, value=value)
-            c.font = _BODY_FONT
-            return c
+        h, b, countifs2 = _h, _b, _countifs2
 
         row = 1
 
@@ -323,39 +325,15 @@ class ExcelExporter:
             end_row=row, end_column=6,
         )
 
-        # Auto-width summary columns
-        for col_idx in range(1, 7):
-            col_letter = get_column_letter(col_idx)
-            max_len = 10
-            for r in range(1, row + 1):
-                val = ws.cell(row=r, column=col_idx).value or ""
-                if not str(val).startswith("="):
-                    max_len = max(max_len, len(str(val)))
-            ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
+        _autofit_summary(ws, 6, row)
 
     # ------------------------------------------------------------------
     # Delta summary sheet
     # ------------------------------------------------------------------
 
     def _write_delta_summary(self, ws, delta: DeltaResult) -> None:
-        f = "Findings"  # sheet reference prefix
         severities = ["CAT I", "CAT II", "CAT III"]
-
-        def countifs2(col_a: str, crit_a: str, col_b: str, crit_b: str) -> str:
-            return (
-                f'=COUNTIFS({f}!${col_a}:${col_a},{crit_a},'
-                f'{f}!${col_b}:${col_b},{crit_b})'
-            )
-
-        def h(row, col, text):
-            c = ws.cell(row=row, column=col, value=text)
-            c.font = _HEADER_FONT
-            return c
-
-        def b(row, col, value):
-            c = ws.cell(row=row, column=col, value=value)
-            c.font = _BODY_FONT
-            return c
+        h, b, countifs2 = partial(_h, ws), partial(_b, ws), _countifs2
 
         row = 1
 
@@ -380,7 +358,8 @@ class ExcelExporter:
             # the delta workbook's only count surface — a SUM would drop those
             # findings silently. Counting independently makes an unrecognized
             # severity show up as a visible B+C+D < Total discrepancy instead.
-            b(row, 5, f'=COUNTIF({f}!${_DELTA_COL_DELTA}:${_DELTA_COL_DELTA},'
+            b(row, 5, f'=COUNTIF({_FINDINGS_SHEET}!'
+                      f'${_DELTA_COL_DELTA}:${_DELTA_COL_DELTA},'
                       f'{_formula_quote(ds)})')
             row += 1
         row += 1  # spacer
@@ -435,15 +414,7 @@ class ExcelExporter:
         note.font = Font(name="Arial", size=9, italic=True, color="808080")
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
 
-        # Auto-width summary columns
-        for col_idx in range(1, 6):
-            col_letter = get_column_letter(col_idx)
-            max_len = 10
-            for r in range(1, row + 1):
-                val = ws.cell(row=r, column=col_idx).value or ""
-                if not str(val).startswith("="):
-                    max_len = max(max_len, len(str(val)))
-            ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
+        _autofit_summary(ws, 5, row)
 
 
 def _unique_pairs(
