@@ -48,7 +48,7 @@ def _add_common_flags(p: argparse.ArgumentParser) -> None:
         "--output",
         metavar="FILE",
         default=None,
-        help="Output Excel file path.",
+        help="Output Excel file path (default: a timestamped name in the CWD).",
     )
     p.add_argument(
         "--verbose",
