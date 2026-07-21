@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,20 @@ class TestDeltaArgs:
         # Back-compat: no subcommand + --results routes to report
         args = _normalize_argv(["--results", "a.xml"])
         assert args[0] == "report"
+
+    def test_subcommand_after_a_flag_is_rejected(self, capsys):
+        # Without the guard this becomes an implicit `report` run and errors
+        # about --results, a flag the user never typed.
+        with pytest.raises(SystemExit) as exc:
+            _normalize_argv(["--verbose", "delta", "--baseline", "a.xml"])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "'delta' must be the first argument" in err
+
+    def test_path_named_like_a_subcommand_is_not_rejected(self):
+        # Scanning stops at the first value-taking option, so a directory
+        # called "delta" is still a legal --results value.
+        assert _normalize_argv(["--results", "delta"]) == ["report", "--results", "delta"]
 
     def test_delta_requires_baseline_and_current(self):
         parser = _build_parser()
@@ -212,7 +227,9 @@ def _variant(path: Path, dest: Path, replacements: dict[str, str]) -> Path:
     """Write a copy of the SCC fixture at *dest* with edits applied.
 
     Each key must appear exactly once in the source so a fixture change can
-    never silently turn an edit into a no-op.
+    never silently turn an edit into a no-op. (A "not unique" failure here
+    almost always means the fixture was reformatted, not that the test is
+    wrong — re-anchor the string against the current fixture text.)
     """
     text = path.read_text(encoding="utf-8")
     for old, new in replacements.items():
@@ -223,12 +240,23 @@ def _variant(path: Path, dest: Path, replacements: dict[str, str]) -> Path:
 
 
 def _delta_rows(path: Path) -> dict[str, str]:
-    """Map Rule ID -> Delta status from a delta workbook's Findings sheet."""
+    """Map Rule ID -> Delta status from a delta workbook's Findings sheet.
+
+    Asserts the mapping is lossless: two rows for one rule (e.g. the same
+    unchanged finding emitted as both Resolved and New — the bug
+    ``_match_two_pass`` exists to prevent) would otherwise collapse into one
+    key and go unnoticed.
+    """
     ws = load_workbook(path)["Findings"]
-    return {
+    rows = {
         ws.cell(row=r, column=4).value: ws.cell(row=r, column=1).value
         for r in range(2, ws.max_row + 1)
     }
+    assert len(rows) == ws.max_row - 1, (
+        f"{ws.max_row - 1} finding rows collapsed into {len(rows)} rule IDs "
+        "— the sheet contains duplicate rows for a rule"
+    )
+    return rows
 
 
 class TestDeltaEndToEnd:
@@ -345,6 +373,122 @@ class TestDeltaEndToEnd:
             for r in caplog.records
         ), "delta warnings were not surfaced by the CLI"
 
+    def test_fully_remediated_current_scan_still_reports(self, tmp_path, caplog):
+        """A current scan with zero actionable findings must not abort.
+
+        100% remediation is the operator's best possible outcome; parse_stage
+        would otherwise raise "none had an actionable status" and kill the run.
+        Note the workbook has no Resolved rows: host coverage is derived from
+        findings, so a host with no findings left is invisible to
+        compute_delta and lands in only_baseline_hosts instead. See
+        test_partially_remediated_scan_tags_resolved for the Resolved path.
+        """
+        baseline = FIXTURES / "scc_results.xml"
+        clean = tmp_path / "clean.xml"
+        clean.write_text(
+            re.sub(
+                r"<cdf:result>\w+</cdf:result>",
+                "<cdf:result>pass</cdf:result>",
+                baseline.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(baseline),
+                "--current", str(clean),
+                "--output", str(out),
+            ])
+        assert rc == 0, "a fully remediated current scan must not fail the run"
+        assert out.exists()
+        assert load_workbook(out)["Findings"].max_row == 1  # header only
+
+    def test_fully_clean_baseline_still_reports(self, tmp_path):
+        """A baseline with zero actionable findings is legitimate too.
+
+        (Clean baseline, findings appear later: every current finding is New.)
+        """
+        current = FIXTURES / "scc_results.xml"
+        clean = tmp_path / "clean.xml"
+        clean.write_text(
+            re.sub(
+                r"<cdf:result>\w+</cdf:result>",
+                "<cdf:result>pass</cdf:result>",
+                current.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "delta.xlsx"
+        rc = main([
+            "delta",
+            "--baseline", str(clean),
+            "--current", str(current),
+            "--output", str(out),
+        ])
+        assert rc == 0
+        assert set(_delta_rows(out).values()) == {"New"}
+
+    def test_parse_failure_names_the_offending_scan_set(self, tmp_path, caplog):
+        """The operator must not have to bisect to learn which side failed."""
+        good = FIXTURES / "scc_results.xml"
+        broken = tmp_path / "broken.xml"
+        broken.write_text("<TestResult><unclosed>", encoding="utf-8")
+
+        for bad_side, other, expected in (
+            ("--baseline", "--current", "Baseline scan set"),
+            ("--current", "--baseline", "Current scan set"),
+        ):
+            caplog.clear()
+            with caplog.at_level(logging.ERROR, logger="app.cli"):
+                rc = main([
+                    "delta", bad_side, str(broken), other, str(good),
+                    "--output", str(tmp_path / "delta.xlsx"),
+                ])
+            assert rc == 1
+            assert any(expected in r.message for r in caplog.records), (
+                f"{bad_side} failure not attributed to '{expected}': "
+                f"{[r.message for r in caplog.records]}"
+            )
+
+    def test_partially_remediated_scan_tags_resolved(self, tmp_path, caplog):
+        """Remediated findings on a still-reporting host are tagged Resolved."""
+        baseline = FIXTURES / "scc_results.xml"
+        # Everything passes except SV-254239, so the host still appears in the
+        # current run and its four other findings are inferred Resolved.
+        text = re.sub(
+            r"<cdf:result>\w+</cdf:result>",
+            "<cdf:result>pass</cdf:result>",
+            baseline.read_text(encoding="utf-8"),
+        )
+        keep = (
+            'idref="xccdf_mil.disa.stig_rule_SV-254239r945408_rule" '
+            'severity="high" time="2024-11-15T08:05:00">\n    <cdf:result>'
+        )
+        assert text.count(f"{keep}pass<") == 1
+        current = tmp_path / "current.xml"
+        current.write_text(text.replace(f"{keep}pass<", f"{keep}fail<"), encoding="utf-8")
+
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.INFO, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(baseline),
+                "--current", str(current),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        rows = _delta_rows(out)
+        assert sorted(rows.values()) == ["Persisting", "Resolved", "Resolved", "Resolved", "Resolved"]
+        assert rows["xccdf_mil.disa.stig_rule_SV-254239r945408_rule"] == "Persisting"
+        # The console summary must match the workbook (headless/CI operators
+        # only ever see this line).
+        assert any(
+            "Delta: 0 new, 4 resolved, 1 persisting across 1 common host(s)" in r.message
+            for r in caplog.records
+        ), [r.message for r in caplog.records]
+
     def test_parse_warnings_from_both_sides_are_logged(self, tmp_path, caplog):
         """parse_stage warnings from BOTH scan sets must reach the operator.
 
@@ -389,7 +533,60 @@ class TestDeltaEndToEnd:
             ])
         assert rc == 1
         assert not out.exists()
-        assert any(r.levelno >= logging.ERROR for r in caplog.records)
+        assert any(
+            r.levelno >= logging.ERROR and "nope.xml" in r.message
+            for r in caplog.records
+        ), "the error must name the path that wasn't found"
+
+    def test_unwritable_output_exits_cleanly(self, tmp_path, caplog):
+        """Export failures (locked/unwritable file, missing dir) exit 1, not a
+        traceback — an operator re-running with the workbook open in Excel
+        hits this."""
+        fixture = FIXTURES / "scc_results.xml"
+        out = tmp_path / "no_such_dir" / "delta.xlsx"
+        with caplog.at_level(logging.ERROR, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(fixture),
+                "--current", str(fixture),
+                "--output", str(out),
+            ])
+        assert rc == 1
+        assert any("Export failed" in r.message for r in caplog.records)
+
+    def test_default_output_name_is_a_delta_workbook(self, tmp_path, monkeypatch):
+        """Without --output the file must be stig_delta_*, not stig_findings_*."""
+        fixture = FIXTURES / "scc_results.xml"
+        monkeypatch.chdir(tmp_path)
+        rc = main([
+            "delta", "--baseline", str(fixture), "--current", str(fixture),
+        ])
+        assert rc == 0
+        written = [p.name for p in tmp_path.glob("*.xlsx")]
+        assert len(written) == 1, written
+        assert written[0].startswith("stig_delta_"), written
+
+    def test_baseline_hosts_not_rescanned_are_reported(self, tmp_path, caplog):
+        """Partial host coverage is warned about, not silently dropped."""
+        baseline_a = FIXTURES / "scc_results.xml"
+        baseline_b = _variant(
+            baseline_a,
+            tmp_path / "host02.xml",
+            {"<cdf:target>WIN-SERVER-01</cdf:target>": "<cdf:target>WIN-SERVER-02</cdf:target>"},
+        )
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(baseline_a), str(baseline_b),
+                "--current", str(baseline_a),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        assert any(
+            "not re-scanned" in r.message and "WIN-SERVER-02" in r.message
+            for r in caplog.records
+        ), "unscanned baseline hosts must be named"
 
     def test_no_common_hosts_warns(self, tmp_path, caplog):
         """Disjoint hostnames make Resolved uninferable — the operator is told."""

@@ -7,6 +7,7 @@ import logging
 import shutil
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 from app.core.pipeline import (
@@ -17,7 +18,12 @@ from app.core.pipeline import (
     export_stage,
     parse_stage,
 )
-from app.processors.delta import compute_delta
+from app.processors.delta import DELTA_STATUSES, compute_delta
+
+# Accepted input extensions, shared by both subcommands so a newly supported
+# format only has to be added in one place.
+_RESULT_EXTS = (".xml", ".cklb", ".nessus")
+_BENCHMARK_EXTS = (".xml", ".zip")
 
 
 def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> list[Path]:
@@ -41,6 +47,8 @@ def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> 
 
 
 _SUBCOMMANDS = ("report", "delta")
+# Options whose values may themselves be paths named like a subcommand.
+_VALUE_OPTS = ("--results", "--benchmarks", "--baseline", "--current", "--output")
 
 
 def _add_common_flags(p: argparse.ArgumentParser) -> None:
@@ -131,10 +139,39 @@ def _normalize_argv(argv: list[str]) -> list[str]:
     An empty argv is normalized too, so a bare ``stig-parser`` still fails
     with the historical "--results is required" usage error rather than
     falling through with ``command=None``.
+
+    Exits 2 if a subcommand appears somewhere other than first (e.g.
+    ``stig-parser --verbose delta ...``) — silently treating that as a
+    ``report`` run produces a baffling "--results is required" error about a
+    flag the user never typed.
     """
     if argv and (argv[0] in _SUBCOMMANDS or argv[0] in ("-h", "--help")):
         return argv
+
+    misplaced = _misplaced_subcommand(argv)
+    if misplaced:
+        print(
+            f"stig-parser: error: '{misplaced}' must be the first argument: "
+            f"stig-parser {misplaced} [options]",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     return ["report", *argv]
+
+
+def _misplaced_subcommand(argv: list[str]) -> str | None:
+    """Return a subcommand name typed after another argument, if any.
+
+    Scanning stops at the first value-taking option: everything after one may
+    legitimately be a file or directory named ``report`` or ``delta``.
+    """
+    for tok in argv:
+        if tok in _VALUE_OPTS:
+            return None
+        if tok in _SUBCOMMANDS:
+            return tok
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -142,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(_normalize_argv(raw))
 
-    level = logging.DEBUG if getattr(args, "verbose", False) else logging.INFO
+    level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(levelname)s  %(name)s  %(message)s",
@@ -158,9 +195,9 @@ def _run_report(args: argparse.Namespace) -> int:
     log = logging.getLogger("app.cli")
 
     # Resolve file paths (results: .xml/.cklb/.nessus, benchmarks: .xml/.zip)
-    results_paths = _resolve_paths(args.results, extensions=(".xml", ".cklb", ".nessus"))
+    results_paths = _resolve_paths(args.results, extensions=_RESULT_EXTS)
     benchmark_paths = (
-        _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
+        _resolve_paths(args.benchmarks, extensions=_BENCHMARK_EXTS)
         if args.benchmarks
         else []
     )
@@ -215,10 +252,10 @@ def _run_report(args: argparse.Namespace) -> int:
 def _run_delta(args: argparse.Namespace) -> int:
     log = logging.getLogger("app.cli")
 
-    baseline_paths = _resolve_paths(args.baseline, extensions=(".xml", ".cklb", ".nessus"))
-    current_paths = _resolve_paths(args.current, extensions=(".xml", ".cklb", ".nessus"))
+    baseline_paths = _resolve_paths(args.baseline, extensions=_RESULT_EXTS)
+    current_paths = _resolve_paths(args.current, extensions=_RESULT_EXTS)
     benchmark_paths = (
-        _resolve_paths(args.benchmarks, extensions=(".xml", ".zip"))
+        _resolve_paths(args.benchmarks, extensions=_BENCHMARK_EXTS)
         if args.benchmarks
         else []
     )
@@ -249,11 +286,25 @@ def _run_delta(args: argparse.Namespace) -> int:
 
     extract_dir = Path(tempfile.mkdtemp(prefix="stig_zip_"))
     try:
+        # Per-side extraction dirs: sharing one would expand every benchmark
+        # ZIP twice (DISA STIG library ZIPs are large). allow_empty lets a
+        # fully remediated scan set through — zero actionable findings is a
+        # legitimate delta input, not a failure.
         try:
-            base_res = parse_stage(baseline_paths, benchmark_paths, extract_dir)
-            curr_res = parse_stage(current_paths, benchmark_paths, extract_dir)
+            base_res = parse_stage(
+                baseline_paths, benchmark_paths, extract_dir / "baseline",
+                allow_empty=True,
+            )
         except PipelineError as exc:
-            log.error("%s", exc)
+            log.error("Baseline scan set: %s", exc)
+            return 1
+        try:
+            curr_res = parse_stage(
+                current_paths, benchmark_paths, extract_dir / "current",
+                allow_empty=True,
+            )
+        except PipelineError as exc:
+            log.error("Current scan set: %s", exc)
             return 1
 
         for w in (*base_res.warnings, *curr_res.warnings):
@@ -269,9 +320,28 @@ def _run_delta(args: argparse.Namespace) -> int:
         if not delta.common_hosts:
             log.warning(
                 "No hosts appear in BOTH scan sets — check that hostnames "
-                "match. All baseline hosts are 'not re-scanned' and all "
-                "current hosts are 'new'."
+                "match, or that one set isn't fully remediated (a scan with "
+                "no actionable findings contributes no hosts). All baseline "
+                "hosts are 'not re-scanned' and all current hosts are 'new'."
             )
+        elif delta.only_baseline_hosts:
+            # Not an error, but their findings are dropped entirely, so the
+            # Resolved count below covers fewer hosts than the operator may
+            # assume.
+            log.warning(
+                "%d baseline host(s) were not re-scanned in the current set — "
+                "their findings are excluded, since resolution cannot be "
+                "inferred for a host nobody re-scanned: %s",
+                len(delta.only_baseline_hosts),
+                ", ".join(sorted(delta.only_baseline_hosts)),
+            )
+
+        counts = Counter(f.delta_status for f in delta.findings)
+        log.info(
+            "Delta: %s across %d common host(s)",
+            ", ".join(f"{counts[s]} {s.lower()}" for s in DELTA_STATUSES),
+            len(delta.common_hosts),
+        )
 
         output_path = (
             Path(args.output) if args.output else Path(default_delta_output_name())
@@ -279,7 +349,7 @@ def _run_delta(args: argparse.Namespace) -> int:
         log.info("Exporting delta to %s…", output_path)
         try:
             export_delta_stage(delta, output_path)
-        except ValueError as exc:
+        except Exception as exc:
             log.error("Export failed: %s", exc)
             return 1
 
