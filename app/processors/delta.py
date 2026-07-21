@@ -64,17 +64,40 @@ def compute_delta(
 ) -> DeltaResult:
     """Compare two actionable finding sets and classify each finding.
 
-    Classification is keyed on ``(server, vuln_id)``. This step assumes both
-    hosts overlap; coverage scoping (unscanned / new hosts) is layered on in a
-    later step.
+    Classification is keyed on ``(server, vuln_id)`` and scoped to host
+    coverage: comparison only happens for hosts present in both runs.
+    Hosts present only in the baseline were not re-scanned, so their
+    findings cannot be inferred as resolved and are excluded entirely.
+    Hosts present only in the current run are wholly new, so every finding
+    on them is New.
     """
     b_index = {(f.server, f.vuln_id): f for f in baseline}
     c_index = {(f.server, f.vuln_id): f for f in current}
 
-    result = DeltaResult()
+    baseline_hosts = {f.server for f in baseline}
+    current_hosts = {f.server for f in current}
+    common = baseline_hosts & current_hosts
+
+    result = DeltaResult(
+        common_hosts=common,
+        only_baseline_hosts=baseline_hosts - current_hosts,
+        only_current_hosts=current_hosts - baseline_hosts,
+    )
+
     for key in set(b_index) | set(c_index):
+        server, _vuln = key
         b = b_index.get(key)
         c = c_index.get(key)
+
+        if server in result.only_current_hosts:
+            # Whole host is new — every finding on it is New.
+            result.findings.append(_tag(c, _NEW, "", c.status))
+            continue
+        if server in result.only_baseline_hosts:
+            # Host was not re-scanned — cannot infer remediation. Exclude.
+            continue
+
+        # server in common
         if b and c:
             result.findings.append(_tag(c, _PERSISTING, b.status, c.status))
         elif c is not None:
