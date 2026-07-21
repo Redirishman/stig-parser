@@ -340,7 +340,6 @@ class ExcelExporter:
     def _write_delta_summary(self, ws, delta: DeltaResult) -> None:
         f = "Findings"  # sheet reference prefix
         severities = ["CAT I", "CAT II", "CAT III"]
-        delta_statuses = list(DELTA_STATUSES)
 
         def countifs2(col_a: str, crit_a: str, col_b: str, crit_b: str) -> str:
             return (
@@ -367,14 +366,22 @@ class ExcelExporter:
             h(row, ci, lbl)
         row += 1
 
-        for ds in delta_statuses:
+        for ds in DELTA_STATUSES:
             b(row, 1, ds)
             for ci, sev in enumerate(severities, 2):
                 b(row, ci, countifs2(
                     _DELTA_COL_DELTA, _formula_quote(ds),
                     _DELTA_COL_SEVERITY, _formula_quote(sev),
                 ))
-            b(row, 5, f"=SUM(B{row}:D{row})")
+            # Total counts the Delta column directly rather than SUMming the
+            # three CAT columns: severity is NOT guaranteed to be one of them.
+            # Both benchmark_parser and cklb_parser emit "Unknown" when the
+            # source attribute is missing or unrecognized, and this table is
+            # the delta workbook's only count surface — a SUM would drop those
+            # findings silently. Counting independently makes an unrecognized
+            # severity show up as a visible B+C+D < Total discrepancy instead.
+            b(row, 5, f'=COUNTIF({f}!${_DELTA_COL_DELTA}:${_DELTA_COL_DELTA},'
+                      f'{_formula_quote(ds)})')
             row += 1
         row += 1  # spacer
 
@@ -408,7 +415,10 @@ class ExcelExporter:
             h(row, 1, "Warnings")
             row += 1
             for warning in delta.warnings:
-                b(row, 1, _sanitize_cell(warning))
+                cell = b(row, 1, _sanitize_cell(warning))
+                # Warnings interpolate scanner-supplied hostnames and can run
+                # long; wrap rather than letting one spill across the sheet.
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
                 row += 1
             row += 1  # spacer
 

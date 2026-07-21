@@ -16,7 +16,7 @@ from app.exporters.excel_exporter import (
     _sanitize_cell,
 )
 from app.parsers.base import Finding
-from app.processors.delta import DeltaFinding, DeltaResult
+from app.processors.delta import DELTA_STATUSES, DeltaFinding, DeltaResult
 
 
 def _finding(
@@ -294,6 +294,18 @@ def test_delta_findings_layout_header_and_row_order(tmp_path):
     ]
 
 
+def _delta_col_letter(header: str) -> str:
+    """Column letter the live _DELTA_COLS layout assigns to *header*."""
+    return get_column_letter([h for h, _a, _w in _DELTA_COLS].index(header) + 1)
+
+
+def _row_of(ws, label: str) -> int:
+    """Row number whose column A equals *label*."""
+    return next(
+        r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == label
+    )
+
+
 @pytest.mark.parametrize(
     ("header", "constant"),
     [("Delta", _DELTA_COL_DELTA), ("Severity", _DELTA_COL_SEVERITY)],
@@ -335,6 +347,127 @@ def test_delta_column_fill_per_status(tmp_path):
         "Resolved": "C6EFCE",    # green: remediated
         "Persisting": "FFEB9C",  # amber: still open
     }
+
+
+def test_delta_findings_sheet_freeze_filter_and_wrap(tmp_path):
+    result = DeltaResult(findings=[_delta_finding("New")], common_hosts={"SERVER01"})
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Findings"]
+
+    assert ws.freeze_panes == "A2"
+    assert ws.auto_filter.ref == f"A1:{get_column_letter(len(_DELTA_COLS))}1"
+    # Long free text wraps; short identifiers must not.
+    for header in ("Check Text", "Fix Text"):
+        col = ws[f"{_delta_col_letter(header)}2"]
+        assert col.alignment.wrap_text, f"{header} should wrap"
+        assert col.alignment.vertical == "top"
+    for header in ("Delta", "Severity", "Server"):
+        col = ws[f"{_delta_col_letter(header)}2"]
+        assert not col.alignment.wrap_text, f"{header} should not wrap"
+
+
+def test_delta_summary_countifs_addresses_live_layout(tmp_path):
+    """Assert the formulas the writer actually emits, with expected column
+    letters derived from _DELTA_COLS.
+
+    Comparing the module constants to _DELTA_COLS (above) never invokes the
+    writer, so it cannot catch a wrong letter hardcoded inside the writer, nor
+    the formulas being dropped entirely. Either produces an all-zero
+    accreditation summary with no error.
+    """
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(
+        DeltaResult(findings=[_delta_finding("New")], common_hosts={"SERVER01"}), out
+    )
+    ws = load_workbook(out)["Summary"]
+
+    formulas = {
+        c.value
+        for r in ws.iter_rows()
+        for c in r
+        if isinstance(c.value, str) and c.value.startswith("=COUNTIFS")
+    }
+    d = _delta_col_letter("Delta")
+    s = _delta_col_letter("Severity")
+    expected = {
+        f'=COUNTIFS(Findings!${d}:${d},"{status}",Findings!${s}:${s},"{sev}")'
+        for status in DELTA_STATUSES
+        for sev in ("CAT I", "CAT II", "CAT III")
+    }
+    assert formulas == expected
+    assert len(formulas) == 9  # 3 delta statuses x 3 severities
+
+
+def test_delta_summary_total_is_severity_independent(tmp_path):
+    """severity is not guaranteed to be CAT I/II/III — benchmark_parser and
+    cklb_parser both emit "Unknown". A SUM over the three CAT columns would
+    drop those findings from the delta workbook's only count surface."""
+    result = DeltaResult(
+        findings=[
+            _delta_finding("New", "V-1", severity="CAT I"),
+            _delta_finding("New", "V-2", severity="Unknown"),
+            _delta_finding("New", "V-3", severity="Unknown"),
+        ],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    wb = load_workbook(out)
+
+    assert wb["Findings"].max_row == 4, "3 findings + header"
+    ws = wb["Summary"]
+    d = _delta_col_letter("Delta")
+    total = ws.cell(row=_row_of(ws, "New"), column=5).value
+    assert total == f'=COUNTIF(Findings!${d}:${d},"New")'
+
+
+def test_delta_summary_coverage_pairs_labels_with_host_lists(tmp_path):
+    """The label→list pairing is what stops the workbook presenting a host that
+    was never re-scanned as remediated — assert it positionally, not by
+    substring search over a flattened blob."""
+    only_base = {"OLDHOST-B", "OLDHOST-A"}
+    only_curr = {"NEWHOST-A"}
+    result = DeltaResult(
+        findings=[_delta_finding("Persisting", "V-1")],
+        common_hosts={"SERVER01", "SERVER02", "SERVER03"},
+        only_baseline_hosts=only_base,
+        only_current_hosts=only_curr,
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Summary"]
+
+    # Distinct counts (3 / 2 / 1) so a bucket mix-up can't coincidentally match.
+    assert ws.cell(row=_row_of(ws, "Hosts compared"), column=2).value == 3
+
+    for label, hosts in (
+        ("Hosts not re-scanned", only_base),
+        ("New hosts", only_curr),
+    ):
+        r = _row_of(ws, label)
+        assert ws.cell(row=r, column=2).value == len(hosts), f"{label} count"
+        listed = [ws.cell(row=r + 1 + i, column=2).value for i in range(len(hosts))]
+        assert listed == sorted(hosts), f"{label} host list"
+
+
+def test_delta_summary_keeps_resolved_caveat_footer(tmp_path):
+    """The sentence that stops a reader over-reading the Resolved count."""
+    result = DeltaResult(
+        findings=[_delta_finding("Resolved", "V-1", current_status="")],
+        common_hosts={"SERVER01"},
+        only_baseline_hosts={"OLDHOST"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Summary"]
+
+    text = " ".join(
+        str(ws.cell(row=r, column=1).value)
+        for r in range(1, ws.max_row + 1)
+        if ws.cell(row=r, column=1).value is not None
+    )
+    assert "never counted as resolved" in text
 
 
 def test_export_delta_sanitizes_formula_injection(tmp_path):
@@ -472,6 +605,11 @@ def test_export_delta_summary_renders_warnings(tmp_path):
     # column A at exactly 60 whether or not any warning exists.)
     assert len(warning) > 60
     assert ws.column_dimensions["A"].width < len(warning)
+    # Warnings interpolate scanner-supplied hostnames and run long — wrapped so
+    # one entry can't spill across the sheet.
+    warn_cell = ws.cell(row=_row_of(ws, warning), column=1)
+    assert warn_cell.alignment.wrap_text
+    assert warn_cell.alignment.vertical == "top"
 
 
 def test_export_delta_summary_omits_warnings_block_when_clean(tmp_path):
