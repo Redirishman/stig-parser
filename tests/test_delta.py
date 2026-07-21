@@ -1,6 +1,8 @@
 """Tests for app.processors.delta — baseline-vs-current comparison."""
 from __future__ import annotations
 
+import logging
+
 from app.parsers.base import Finding
 from app.processors.delta import DeltaFinding, DeltaResult, compute_delta
 
@@ -156,8 +158,6 @@ class TestBlankVulnIdIdentity:
         # blank vuln_id + same rule_id) are a genuine key collision, not a
         # dropped-finding scenario. Silent last-write-wins would hide it;
         # the implementation should keep the first and log a warning.
-        import logging
-
         base = [_finding("V-1")]
         curr = [_finding("V-1"), _finding("V-1")]
         with caplog.at_level(logging.WARNING):
@@ -165,6 +165,10 @@ class TestBlankVulnIdIdentity:
         assert len(result.findings) == 1
         assert result.findings[0].delta_status == "Persisting"
         assert any("duplicate" in rec.message.lower() for rec in caplog.records)
+        # DeltaResult.warnings is the user-visible channel (mirrors
+        # ParseResult.warnings) -- the pipeline's log.warning alone isn't
+        # enough for an operator to see it in the CLI/exporter output.
+        assert any("duplicate" in w.lower() for w in result.warnings)
 
 
 class TestHostMatching:
@@ -215,3 +219,107 @@ class TestResolvedRowData:
         assert f.fix_text == "baseline fix text"
         assert f.baseline_status == "Open"
         assert f.current_status == ""
+
+
+class TestAsymmetricBenchmarkCoverage:
+    """Regression coverage for the round-2 review finding: a single-key
+    scheme (vuln_id-or-rule_id) fails when one run is parsed WITH a
+    benchmark and the other WITHOUT. The reviewer reproduced this by
+    running the same fixture file through parse_stage twice -- once with
+    ``benchmarks=[]`` and once with a real benchmark -- and got
+    Counter({'Resolved': 5, 'New': 5}) for identical scan data.
+
+    These finding lists are constructed by hand rather than via a live
+    parse_stage() call (keeping this module's test suite pure-unit like
+    the rest of the file), but mirror exactly what parse_stage produces
+    for that scenario: blank vuln_id + full rule_id when no benchmark is
+    supplied, populated vuln_id + the SAME rule_id when one is.
+    """
+
+    def test_same_scan_no_benchmark_vs_with_benchmark_is_all_persisting(self):
+        rule_ids = [
+            f"xccdf_mil.disa.stig_rule_SV-25423{i}r945408_rule" for i in range(5)
+        ]
+        # baseline: parsed WITHOUT --benchmarks -> vuln_id blank everywhere
+        base = [
+            _finding("", server="HOST1", rule_id=rid, status="Open")
+            for rid in rule_ids
+        ]
+        # current: parsed WITH --benchmarks -> vuln_id populated
+        curr = [
+            _finding(f"V-25423{i}", server="HOST1", rule_id=rid, status="Open")
+            for i, rid in enumerate(rule_ids)
+        ]
+        result = compute_delta(base, curr)
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert buckets["New"] == []
+        assert len(buckets["Persisting"]) == 5
+        # Two-pass matching fully recovered every finding as Persisting --
+        # no residual Resolved/New -- so there's nothing unreliable to warn
+        # about here (see TestAsymmetricBenchmarkCoverage's other test for
+        # the case where a coverage-mismatch warning SHOULD fire).
+        assert result.warnings == []
+
+    def test_asymmetric_coverage_with_a_genuine_change_still_resolves_correctly(self):
+        # Same asymmetric-coverage setup, but one finding is genuinely
+        # fixed (present in baseline, absent from current) and one is
+        # genuinely new (present in current only, no baseline rule_id
+        # match at all). Two-pass rule_id matching should not paper over
+        # real changes -- only recover the ones that are byte-identical.
+        base = [
+            _finding("", server="HOST1", rule_id="SV-1_rule", status="Open"),
+            _finding("", server="HOST1", rule_id="SV-2_rule", status="Open"),
+        ]
+        curr = [
+            _finding("V-1", server="HOST1", rule_id="SV-1_rule", status="Open"),
+            # SV-2_rule genuinely fixed -- absent from current
+            _finding("V-3", server="HOST1", rule_id="SV-3_rule", status="Open"),
+        ]
+        result = compute_delta(base, curr)
+        buckets = _by_status(result)
+        assert len(buckets["Persisting"]) == 1
+        assert buckets["Persisting"][0].rule_id == "SV-1_rule"
+        assert [f.rule_id for f in buckets["Resolved"]] == ["SV-2_rule"]
+        assert [f.vuln_id for f in buckets["New"]] == ["V-3"]
+        # Residual Resolved/New remains AND the two runs have different
+        # Vuln-ID coverage (100% blank in baseline, 0% in current) -- this
+        # is exactly the condition under which the coverage-mismatch
+        # warning should fire, so the operator knows to double-check
+        # SV-2_rule's "Resolved" classification.
+        assert any(
+            "vuln-id coverage" in w.lower() or "benchmark" in w.lower()
+            for w in result.warnings
+        )
+
+
+class TestDeterministicOrdering:
+    def test_stable_across_repeated_calls(self):
+        base = [_finding("", rule_id=f"SV-{i}_rule") for i in range(6)]
+        curr = [_finding("", rule_id=f"SV-{i}_rule") for i in range(6)]
+        order1 = [f.rule_id for f in compute_delta(base, curr).findings]
+        order2 = [f.rule_id for f in compute_delta(base, curr).findings]
+        order3 = [f.rule_id for f in compute_delta(base, curr).findings]
+        assert order1 == order2 == order3
+
+    def test_explicit_order_for_blank_vuln_id_tie(self):
+        # All on the same server, all blank vuln_id, all Persisting -> the
+        # sort key ties down to rule_id, which must break the tie
+        # deterministically (server, vuln_id, rule_id, delta_status).
+        base = [_finding("", rule_id=f"SV-{i}_rule") for i in (3, 1, 4, 0, 5, 2)]
+        curr = [_finding("", rule_id=f"SV-{i}_rule") for i in (3, 1, 4, 0, 5, 2)]
+        result = compute_delta(base, curr)
+        assert [f.rule_id for f in result.findings] == [
+            "SV-0_rule",
+            "SV-1_rule",
+            "SV-2_rule",
+            "SV-3_rule",
+            "SV-4_rule",
+            "SV-5_rule",
+        ]
+
+
+class TestWarningsField:
+    def test_defaults_to_empty_list(self):
+        result = compute_delta([_finding("V-1")], [_finding("V-1")])
+        assert result.warnings == []
