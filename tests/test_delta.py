@@ -87,3 +87,41 @@ class TestCoverageScoping:
         curr = [_finding("V-1", "SERVER01")]
         buckets = _by_status(compute_delta(base, curr))
         assert [f.vuln_id for f in buckets["Resolved"]] == ["V-2"]
+
+
+class TestPersistingDetail:
+    def test_status_flip_retained(self):
+        base = [_finding("V-1", status="Not Reviewed")]
+        curr = [_finding("V-1", status="Open")]
+        f = compute_delta(base, curr).findings[0]
+        assert f.delta_status == "Persisting"
+        assert f.baseline_status == "Not Reviewed"
+        assert f.current_status == "Open"
+
+    def test_benchmark_revision_churn_is_persisting(self):
+        # Same vuln_id, different rule_id revision -> Persisting, not New+Resolved
+        base = [_finding("V-1", rule_id="SV-1r1_rule")]
+        curr = [_finding("V-1", rule_id="SV-1r2_rule")]
+        buckets = _by_status(compute_delta(base, curr))
+        assert len(buckets["Persisting"]) == 1
+        assert buckets["New"] == [] and buckets["Resolved"] == []
+
+
+class TestEmptySets:
+    def test_empty_baseline_all_new(self):
+        # No baseline hosts -> every current host is a new host -> all New
+        curr = [_finding("V-1"), _finding("V-2")]
+        buckets = _by_status(compute_delta([], curr))
+        assert len(buckets["New"]) == 2
+        assert buckets["Resolved"] == []
+
+    def test_empty_current_all_not_rescanned(self):
+        # No current hosts -> baseline hosts all unscanned -> nothing Resolved
+        base = [_finding("V-1"), _finding("V-2")]
+        result = compute_delta(base, [])
+        assert result.findings == []
+        assert result.only_baseline_hosts == {"SERVER01"}
+
+    def test_both_empty(self):
+        result = compute_delta([], [])
+        assert result.findings == []
