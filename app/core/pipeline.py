@@ -16,6 +16,7 @@ from app.parsers.benchmark_parser import BenchmarkParser
 from app.parsers.cklb_parser import CKLBParser
 from app.parsers.nessus_parser import NessusComplianceParser
 from app.parsers.xccdf_parser import XCCDFResultsParser
+from app.processors.delta import DeltaResult
 from app.processors.filter import filter_findings
 from app.processors.matcher import match_results_to_benchmarks
 from app.utils.zip_extract import expand_benchmark_paths
@@ -169,3 +170,14 @@ def default_output_name() -> str:
     """Timestamped default output filename."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return f"stig_findings_{ts}.xlsx"
+
+
+def export_delta_stage(delta: DeltaResult, output_path: Path) -> None:
+    """Write a delta result to an Excel workbook at ``output_path``."""
+    ExcelExporter().export_delta(delta, output_path)
+
+
+def default_delta_output_name() -> str:
+    """Timestamped default delta output filename."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"stig_delta_{ts}.xlsx"

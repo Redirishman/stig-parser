@@ -8,11 +8,14 @@ from app.core.pipeline import (
     ParseResult,
     PipelineError,
     compute_summary,
+    default_delta_output_name,
     default_output_name,
+    export_delta_stage,
     export_stage,
     parse_stage,
 )
 from app.parsers.base import Finding
+from app.processors.delta import DeltaFinding, DeltaResult
 
 
 def _finding(severity="CAT II", server="host1"):
@@ -125,3 +128,25 @@ def test_parse_stage_cancel_check_is_invoked(tmp_path):
     with pytest.raises(PipelineError):
         parse_stage([bad], [], tmp_path / "e", cancel_check=cancel)
     assert calls, "cancel_check should be invoked at least once"
+
+
+def test_default_delta_output_name_shape():
+    name = default_delta_output_name()
+    assert name.startswith("stig_delta_") and name.endswith(".xlsx")
+
+
+def test_export_delta_stage_writes_file(tmp_path):
+    delta = DeltaResult(
+        findings=[
+            DeltaFinding(
+                stig_title="t", vuln_id="V-1", rule_id="SV-1r1_rule",
+                severity="CAT I", server="SERVER01", ip_address="10.0.0.1",
+                check_text="c", fix_text="f", delta_status="New",
+                baseline_status="", current_status="Open",
+            )
+        ],
+        only_current_hosts={"SERVER01"},
+    )
+    out = tmp_path / "d.xlsx"
+    export_delta_stage(delta, out)
+    assert out.exists()
