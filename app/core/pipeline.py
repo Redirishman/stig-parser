@@ -43,6 +43,7 @@ def parse_stage(
     extract_dir: Path,
     *,
     cancel_check: Callable[[], None] | None = None,
+    allow_empty: bool = False,
 ) -> ParseResult:
     """Parse results + benchmarks, match, and filter to actionable findings.
 
@@ -50,6 +51,12 @@ def parse_stage(
     work; it may raise to abort (the Flask worker uses this for cancellation).
     Raises :class:`PipelineError` (user-safe message) when no actionable
     findings can be produced.
+
+    ``allow_empty`` relaxes ONLY the zero-actionable-findings case: a scan set
+    where every rule passed returns an empty ``ParseResult`` instead of
+    raising. Delta runs need this — a fully remediated scan set is a
+    legitimate (and desirable) input, not a failure. A results set where
+    nothing could be parsed at all still raises regardless.
     """
 
     def _check() -> None:
@@ -116,7 +123,7 @@ def parse_stage(
     findings.extend(sc_findings)
     findings = filter_findings(findings)
 
-    if not findings:
+    if not findings and not allow_empty:
         total_rules = sum(len(s.rule_results) for s in scan_results)
         total_rules += len(sc_findings)
         if total_rules == 0:

@@ -99,6 +99,30 @@ def test_parse_stage_raises_when_rules_present_but_none_actionable(tmp_path):
     assert "actionable status" in str(exc.value).lower()
 
 
+def test_parse_stage_allow_empty_returns_empty_result(tmp_path):
+    # Same input as the test above: with allow_empty the zero-actionable-
+    # findings case is permissible (a delta baseline/current side may be
+    # fully remediated) and yields an empty ParseResult instead of raising.
+    src = tmp_path / "all_pass.xml"
+    src.write_text(_ALL_PASS_XCCDF, encoding="utf-8")
+    result = parse_stage([src], [], tmp_path / "e", allow_empty=True)
+    assert isinstance(result, ParseResult)
+    assert result.findings == []
+    assert result.source_file_count == 1
+
+
+def test_parse_stage_allow_empty_still_raises_when_nothing_parses(tmp_path):
+    # allow_empty relaxes ONLY the "no actionable findings" case. A results
+    # set where nothing parsed at all is still a genuine error. (Invalid XML,
+    # not merely non-XCCDF XML: a well-formed file yields a ScanResult with
+    # zero rule-results, which is the *empty* case, not the *unparseable* one.)
+    bad = tmp_path / "broken.xml"
+    bad.write_text("<TestResult><unclosed>", encoding="utf-8")
+    with pytest.raises(PipelineError) as exc:
+        parse_stage([bad], [], tmp_path / "e", allow_empty=True)
+    assert "no valid results files" in str(exc.value).lower()
+
+
 def test_parse_stage_raises_pipelineerror_when_no_results_parse(tmp_path):
     bad = tmp_path / "not_xccdf.xml"
     bad.write_text("<html><body>nope</body></html>", encoding="utf-8")
