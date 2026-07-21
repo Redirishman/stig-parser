@@ -334,7 +334,88 @@ class ExcelExporter:
     # ------------------------------------------------------------------
 
     def _write_delta_summary(self, ws, delta: DeltaResult) -> None:
-        pass  # implemented in Task 5
+        f = "Findings"  # sheet reference prefix
+        severities = ["CAT I", "CAT II", "CAT III"]
+        delta_statuses = list(DELTA_STATUSES)
+
+        def countifs2(col_a: str, crit_a: str, col_b: str, crit_b: str) -> str:
+            return (
+                f'=COUNTIFS({f}!${col_a}:${col_a},{crit_a},'
+                f'{f}!${col_b}:${col_b},{crit_b})'
+            )
+
+        def h(row, col, text):
+            c = ws.cell(row=row, column=col, value=text)
+            c.font = _HEADER_FONT
+            return c
+
+        def b(row, col, value):
+            c = ws.cell(row=row, column=col, value=value)
+            c.font = _BODY_FONT
+            return c
+
+        row = 1
+
+        # ── Table 1: Delta status × severity ──────────────────────────
+        h(row, 1, "Delta Summary")
+        row += 1
+        for ci, lbl in enumerate(["Delta", *severities, "Total"], 1):
+            h(row, ci, lbl)
+        row += 1
+
+        for ds in delta_statuses:
+            b(row, 1, ds)
+            for ci, sev in enumerate(severities, 2):
+                b(row, ci, countifs2(
+                    _DELTA_COL_DELTA, _formula_quote(ds),
+                    _DELTA_COL_SEVERITY, _formula_quote(sev),
+                ))
+            b(row, 5, f"=SUM(B{row}:D{row})")
+            row += 1
+        row += 1  # spacer
+
+        # ── Table 2: Coverage ─────────────────────────────────────────
+        h(row, 1, "Coverage")
+        row += 1
+        b(row, 1, "Hosts compared")
+        b(row, 2, len(delta.common_hosts))
+        row += 1
+        b(row, 1, "Hosts not re-scanned")
+        b(row, 2, len(delta.only_baseline_hosts))
+        row += 1
+        for host in sorted(delta.only_baseline_hosts):
+            b(row, 2, _sanitize_cell(host))
+            row += 1
+        b(row, 1, "New hosts")
+        b(row, 2, len(delta.only_current_hosts))
+        row += 1
+        for host in sorted(delta.only_current_hosts):
+            b(row, 2, _sanitize_cell(host))
+            row += 1
+        row += 1  # spacer
+
+        # ── Footer note ───────────────────────────────────────────────
+        note = ws.cell(
+            row=row,
+            column=1,
+            value=(
+                "Note: 'Resolved' means a baseline finding is absent from the "
+                "current scan on a host present in BOTH runs. Hosts not "
+                "re-scanned are listed above and are never counted as resolved."
+            ),
+        )
+        note.font = Font(name="Arial", size=9, italic=True, color="808080")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+
+        # Auto-width summary columns
+        for col_idx in range(1, 6):
+            col_letter = get_column_letter(col_idx)
+            max_len = 10
+            for r in range(1, row + 1):
+                val = ws.cell(row=r, column=col_idx).value or ""
+                if not str(val).startswith("="):
+                    max_len = max(max_len, len(str(val)))
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
 
 def _unique_pairs(

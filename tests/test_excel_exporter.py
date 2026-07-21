@@ -278,3 +278,77 @@ def test_export_delta_sanitizes_formula_injection(tmp_path):
         ws.cell(row=r, column=2).value for r in range(2, ws.max_row + 1)
     )
     assert str(title_cell).startswith("'=")
+
+    # The coverage block on the Summary sheet echoes hostnames verbatim, so
+    # it needs the same neutralization.
+    summary = wb["Summary"]
+    host_cells = [
+        summary.cell(row=r, column=2).value
+        for r in range(1, summary.max_row + 1)
+        if isinstance(summary.cell(row=r, column=2).value, str)
+    ]
+    assert "'=HYPERLINK(1)" in host_cells
+    assert "=HYPERLINK(1)" not in host_cells
+
+
+def test_export_delta_accepts_single_bucket_result(tmp_path):
+    """An all-Resolved (or all-New) delta is a legitimate result, not an error."""
+    result = DeltaResult(
+        findings=[
+            _delta_finding("Resolved", "V-1", current_status=""),
+            _delta_finding("Resolved", "V-2", current_status=""),
+        ],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    assert out.exists()
+
+
+def test_export_delta_empty_raises(tmp_path):
+    with pytest.raises(ValueError, match="Empty delta"):
+        ExcelExporter().export_delta(DeltaResult(), tmp_path / "empty.xlsx")
+
+
+def test_export_delta_summary_has_coverage_block(tmp_path):
+    result = DeltaResult(
+        findings=[_delta_finding("Persisting", "V-1", server="SERVER01")],
+        common_hosts={"SERVER01"},
+        only_baseline_hosts={"OLDHOST"},
+        only_current_hosts={"NEWHOST"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+
+    wb = load_workbook(out)
+    ws = wb["Summary"]
+    text = "\n".join(
+        str(ws.cell(row=r, column=c).value)
+        for r in range(1, ws.max_row + 1)
+        for c in range(1, 4)
+        if ws.cell(row=r, column=c).value is not None
+    )
+    assert "OLDHOST" in text     # not re-scanned host listed
+    assert "NEWHOST" in text     # new host listed
+    assert "Coverage" in text
+
+
+def test_export_delta_summary_counts_by_status(tmp_path):
+    result = DeltaResult(
+        findings=[
+            _delta_finding("New", "V-2", severity="CAT I"),
+            _delta_finding("Resolved", "V-3", severity="CAT II"),
+            _delta_finding("Persisting", "V-1", severity="CAT II"),
+        ],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    wb = load_workbook(out)
+    ws = wb["Summary"]
+    labels = {
+        str(ws.cell(row=r, column=1).value)
+        for r in range(1, ws.max_row + 1)
+    }
+    assert "Delta Summary" in labels
+    assert "New" in labels and "Resolved" in labels and "Persisting" in labels
