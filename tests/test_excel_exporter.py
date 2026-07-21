@@ -11,6 +11,7 @@ from app.exporters.excel_exporter import (
     _sanitize_cell,
 )
 from app.parsers.base import Finding
+from app.processors.delta import DeltaFinding, DeltaResult
 
 
 def _finding(
@@ -208,3 +209,72 @@ class TestErrorCases:
         path = tmp_path / "output.xlsx"
         exporter.export([_finding()], path)
         assert path.exists()
+
+
+def _delta_finding(
+    delta_status: str,
+    vuln_id: str = "V-1",
+    server: str = "SERVER01",
+    severity: str = "CAT I",
+    baseline_status: str = "Open",
+    current_status: str = "Open",
+) -> DeltaFinding:
+    return DeltaFinding(
+        stig_title="Win2022 STIG",
+        vuln_id=vuln_id,
+        rule_id="SV-1r1_rule",
+        severity=severity,
+        server=server,
+        ip_address="10.0.0.1",
+        check_text="check",
+        fix_text="fix",
+        delta_status=delta_status,
+        baseline_status=baseline_status,
+        current_status=current_status,
+    )
+
+
+def test_export_delta_findings_sheet_has_delta_column(tmp_path):
+    result = DeltaResult(
+        findings=[
+            _delta_finding("New", "V-2", current_status="Open"),
+            _delta_finding("Resolved", "V-3", current_status=""),
+            _delta_finding("Persisting", "V-1"),
+        ],
+        common_hosts={"SERVER01"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+
+    wb = load_workbook(out)
+    ws = wb["Findings"]
+    assert ws.cell(row=1, column=1).value == "Delta"
+    tags = {ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)}
+    assert tags == {"New", "Resolved", "Persisting"}
+
+
+def test_export_delta_sanitizes_formula_injection(tmp_path):
+    evil = DeltaFinding(
+        stig_title="=cmd()",
+        vuln_id="V-1",
+        rule_id="SV-1r1_rule",
+        severity="CAT I",
+        server="=HYPERLINK(1)",
+        ip_address="10.0.0.1",
+        check_text="check",
+        fix_text="fix",
+        delta_status="New",
+        baseline_status="",
+        current_status="Open",
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(
+        DeltaResult(findings=[evil], only_current_hosts={"=HYPERLINK(1)"}), out
+    )
+    wb = load_workbook(out)
+    ws = wb["Findings"]
+    # STIG Title is column 2 in the delta layout
+    title_cell = next(
+        ws.cell(row=r, column=2).value for r in range(2, ws.max_row + 1)
+    )
+    assert str(title_cell).startswith("'=")

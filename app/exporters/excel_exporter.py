@@ -9,6 +9,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.parsers.base import Finding
+from app.processors.delta import DELTA_STATUSES, DeltaResult
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +42,17 @@ _FILL_CAT_II = PatternFill("solid", fgColor="FFEB9C")
 _FILL_CAT_III = PatternFill("solid", fgColor="C6EFCE")
 _SEVERITY_FILL = {"CAT I": _FILL_CAT_I, "CAT II": _FILL_CAT_II, "CAT III": _FILL_CAT_III}
 
+# Delta-status fills (delta findings sheet "Delta" column). The keys are
+# unpacked from DELTA_STATUSES (app/processors/delta.py) rather than repeated
+# as literals, so this exporter cannot silently drift from the delta module:
+# a change to that tuple's shape fails loudly here at import time.
+_STATUS_NEW, _STATUS_RESOLVED, _STATUS_PERSISTING = DELTA_STATUSES
+_DELTA_FILL = {
+    _STATUS_NEW:        PatternFill("solid", fgColor="FFC7CE"),  # red-ish: regression
+    _STATUS_RESOLVED:   PatternFill("solid", fgColor="C6EFCE"),  # green: remediated
+    _STATUS_PERSISTING: PatternFill("solid", fgColor="FFEB9C"),  # amber: still open
+}
+
 _HEADER_FONT = Font(name="Arial", size=10, bold=True)
 _BODY_FONT = Font(name="Arial", size=10)
 
@@ -66,6 +78,26 @@ _COL_STATUS   = "E"   # col 5
 _COL_SERVER   = "F"   # col 6
 _COL_IP       = "G"   # col 7
 
+# (header_label, DeltaFinding_attr, max_col_width) — delta findings sheet
+_DELTA_COLS: list[tuple[str, str, int]] = [
+    ("Delta",            "delta_status",    12),
+    ("STIG Title",       "stig_title",      50),
+    ("Vuln ID",          "vuln_id",         12),
+    ("Rule ID",          "rule_id",         40),
+    ("Severity",         "severity",        10),
+    ("Baseline Status",  "baseline_status", 16),
+    ("Current Status",   "current_status",  16),
+    ("Server",           "server",          30),
+    ("IP Address",       "ip_address",      18),
+    ("Check Text",       "check_text",      80),
+    ("Fix Text",         "fix_text",        80),
+]
+
+# Delta findings sheet column letters (for Summary COUNTIFS)
+_DELTA_COL_DELTA    = "A"   # col 1
+_DELTA_COL_SEVERITY = "E"   # col 5
+_DELTA_COL_SERVER   = "H"   # col 8
+
 
 class ExcelExporter:
     """Generate an Excel workbook from a list of Finding objects."""
@@ -88,6 +120,32 @@ class ExcelExporter:
 
         wb.save(str(output_path))
         log.info("Workbook written to %s", output_path)
+        return output_path
+
+    def export_delta(self, delta: DeltaResult, output_path: Path) -> Path:
+        """Write a delta workbook (Findings + Summary) and return the path.
+
+        Unlike ``export``, an all-one-bucket result (e.g. every finding New, or
+        every finding Resolved) is valid. Only a delta with no findings AND no
+        host coverage information is rejected.
+        """
+        if not delta.findings and not (
+            delta.common_hosts
+            or delta.only_baseline_hosts
+            or delta.only_current_hosts
+        ):
+            raise ValueError("Empty delta — workbook not generated.")
+
+        wb = Workbook()
+        findings_ws = wb.active
+        findings_ws.title = "Findings"
+        self._write_delta_findings(findings_ws, delta)
+
+        summary_ws = wb.create_sheet("Summary")
+        self._write_delta_summary(summary_ws, delta)
+
+        wb.save(str(output_path))
+        log.info("Delta workbook written to %s", output_path)
         return output_path
 
     # ------------------------------------------------------------------
@@ -122,6 +180,49 @@ class ExcelExporter:
 
         # Column widths — measure actual content, cap at max_width
         for col_idx, (header, attr, max_w) in enumerate(_FINDINGS_COLS, start=1):
+            col_letter = get_column_letter(col_idx)
+            measured = len(header)
+            for row_idx in range(2, ws.max_row + 1):
+                val = ws.cell(row=row_idx, column=col_idx).value or ""
+                measured = max(measured, min(len(str(val).split("\n")[0]), max_w))
+            ws.column_dimensions[col_letter].width = min(measured + 2, max_w)
+
+    # ------------------------------------------------------------------
+    # Delta findings sheet
+    # ------------------------------------------------------------------
+
+    def _write_delta_findings(self, ws, delta: DeltaResult) -> None:
+        # Header row
+        for col_idx, (header, _, _mw) in enumerate(_DELTA_COLS, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = _HEADER_FONT
+            cell.alignment = Alignment(vertical="center")
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(_DELTA_COLS))}1"
+
+        # Data rows
+        for row_idx, finding in enumerate(delta.findings, start=2):
+            for col_idx, (header, attr, _mw) in enumerate(_DELTA_COLS, start=1):
+                value = getattr(finding, attr, "")
+                wrap = header in _WRAP_HEADERS
+                cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_cell(value))
+                cell.font = _BODY_FONT
+                cell.alignment = Alignment(
+                    wrap_text=wrap,
+                    vertical="top" if wrap else "center",
+                )
+                if header == "Delta":
+                    fill = _DELTA_FILL.get(value)
+                    if fill:
+                        cell.fill = fill
+                elif header == "Severity":
+                    fill = _SEVERITY_FILL.get(value)
+                    if fill:
+                        cell.fill = fill
+
+        # Column widths — measure actual content, cap at max_width
+        for col_idx, (header, attr, max_w) in enumerate(_DELTA_COLS, start=1):
             col_letter = get_column_letter(col_idx)
             measured = len(header)
             for row_idx in range(2, ws.max_row + 1):
@@ -227,6 +328,13 @@ class ExcelExporter:
                 if not str(val).startswith("="):
                     max_len = max(max_len, len(str(val)))
             ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
+
+    # ------------------------------------------------------------------
+    # Delta summary sheet
+    # ------------------------------------------------------------------
+
+    def _write_delta_summary(self, ws, delta: DeltaResult) -> None:
+        pass  # implemented in Task 5
 
 
 def _unique_pairs(
