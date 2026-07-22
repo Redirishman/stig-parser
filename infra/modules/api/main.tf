@@ -44,7 +44,9 @@ data "aws_iam_policy_document" "resource_policy" {
     sid       = "AllowInvokeFromOurVpceOnly"
     effect    = "Allow"
     actions   = ["execute-api:Invoke"]
-    resources = ["execute-api:/*"]
+    # Full ARN, not the "execute-api:/*" shorthand: API Gateway stores the
+    # expanded ARN, so the shorthand re-diffs on every plan forever.
+    resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]
     principals {
       type        = "AWS"
       identifiers = ["*"]
@@ -60,7 +62,9 @@ data "aws_iam_policy_document" "resource_policy" {
     sid       = "DenyInvokeFromAnywhereElse"
     effect    = "Deny"
     actions   = ["execute-api:Invoke"]
-    resources = ["execute-api:/*"]
+    # Full ARN, not the "execute-api:/*" shorthand: API Gateway stores the
+    # expanded ARN, so the shorthand re-diffs on every plan forever.
+    resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]
     principals {
       type        = "AWS"
       identifiers = ["*"]
@@ -345,7 +349,10 @@ resource "aws_api_gateway_deployment" "this" {
   triggers = {
     redeployment = sha1(jsonencode([
       aws_api_gateway_rest_api.this.body,
-      aws_api_gateway_rest_api_policy.this.policy,
+      # Hash the plan-time document, not the live policy attribute — the
+      # attribute's post-apply value is AWS-normalized and breaks the plan's
+      # trigger promise ("provider produced inconsistent final plan").
+      data.aws_iam_policy_document.resource_policy.json,
       [for k, m in aws_api_gateway_method.this : m.id],
       [for k, i in aws_api_gateway_integration.this : i.id],
       local.serve_spa_from_s3 ? aws_api_gateway_integration.spa_proxy[0].id : "",
