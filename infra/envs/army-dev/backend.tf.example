@@ -7,7 +7,7 @@
 terraform {
   backend "s3" {
     bucket = "REPLACE-org-terraform-state"
-    key    = "stig-condenser/example/terraform.tfstate"
+    key    = "stig-parser/army-dev/terraform.tfstate"
     region = "us-gov-west-1"
 
     encrypt        = true
