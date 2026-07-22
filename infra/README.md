@@ -12,10 +12,15 @@ This directory is **infrastructure only** — the Python application lives in
 > composition. `terraform fmt`, `terraform validate` and `checkov` pass
 > (448 passed / 0 failed / 54 skipped, every skip with a written reason).
 >
-> **Never applied against a real GovCloud account.** `validate` proves the
-> configuration is well-formed; it does **not** prove the deployment works. The
-> first `apply` is an operator activity, and the items under *Before the first
-> apply* below are still open.
+> **Applied and verified end-to-end in a real GovCloud account (2026-07-22,
+> `envs/army-dev`, us-gov-west-1).** All 147 resources converged, and a real
+> XCCDF fixture ran the full pipeline: presigned upload -> parse -> export ->
+> presigned download of the Excel report. First contact surfaced four repo
+> fixes, all committed on this branch: ASCII-only security-group descriptions,
+> the `ssm` interface endpoint for the AI killswitch, Lambda-SG egress to the
+> S3/DynamoDB gateway prefix lists, and SigV4 presigning (plus a stable API
+> redeployment trigger). Operator access to the private API from workstations
+> remains a network-team follow-up.
 
 ---
 
