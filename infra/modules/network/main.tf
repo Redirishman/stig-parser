@@ -149,11 +149,15 @@ resource "aws_security_group" "lambda" {
   vpc_id      = aws_vpc.this.id
 
   egress {
-    description = "HTTPS to interface VPC endpoints and gateway-endpoint prefixes."
+    description = "HTTPS to interface endpoints plus S3 and DynamoDB gateway-endpoint prefix lists."
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
+    prefix_list_ids = [
+      aws_vpc_endpoint.gateway["s3"].prefix_list_id,
+      aws_vpc_endpoint.gateway["dynamodb"].prefix_list_id,
+    ]
   }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-lambda-sg" })
