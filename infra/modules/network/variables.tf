@@ -24,7 +24,10 @@ variable "interface_endpoint_services" {
     com.amazonaws.<region> prefix). Each bills ~$7-8/mo — see infra/README.md.
   EOT
   type        = list(string)
-  default     = ["execute-api", "bedrock-runtime", "states", "logs", "kms", "sts"]
+  # ssm is required whenever ai_killswitch_param is set: the API and enricher
+  # read the killswitch parameter at request time, and without an endpoint the
+  # call hangs to the 29s function timeout in this zero-egress VPC.
+  default     = ["execute-api", "bedrock-runtime", "states", "logs", "kms", "sts", "ssm"]
 }
 
 variable "enable_monitoring_endpoint" {
