@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import boto3
+from botocore.config import Config as BotoConfig
 
 
 @runtime_checkable
@@ -79,7 +80,13 @@ class S3ArtifactStore:
 
     def __init__(self, bucket: str, region: str, client: Any = None):
         self._bucket = bucket
-        self._client = client or boto3.client("s3", region_name=region)
+        # SigV4 is mandatory: presigned URLs for SSE-KMS buckets are rejected
+        # with InvalidArgument when signed with the legacy default (SigV2).
+        self._client = client or boto3.client(
+            "s3",
+            region_name=region,
+            config=BotoConfig(signature_version="s3v4"),
+        )
 
     def put_bytes(self, key: str, data: bytes) -> None:
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data)
