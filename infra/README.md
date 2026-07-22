@@ -19,8 +19,12 @@ This directory is **infrastructure only** — the Python application lives in
 > fixes, all committed on this branch: ASCII-only security-group descriptions,
 > the `ssm` interface endpoint for the AI killswitch, Lambda-SG egress to the
 > S3/DynamoDB gateway prefix lists, and SigV4 presigning (plus a stable API
-> redeployment trigger). Operator access to the private API from workstations
-> remains a network-team follow-up.
+> redeployment trigger). That verification covered the pre-hardening topology;
+> the hardened operator access path (client-CIDR security groups, the browser
+> S3 presign endpoint, uploads CORS — decision D7) is merged but not yet
+> applied or verified, and operator access from workstations still requires
+> the network team to attach this VPC to the org transit gateway and confirm
+> the approved client CIDRs.
 
 ---
 
@@ -29,10 +33,11 @@ This directory is **infrastructure only** — the Python application lives in
 The **fully-private** requirement forbids NAT and public edge, so every AWS
 service is reached through an **interface VPC endpoint**. PrivateLink bills each
 endpoint **per hour in every selected Availability Zone**, plus data processed,
-regardless of usage. This design creates seven required endpoint services
+regardless of usage. This design creates eight required endpoint services
 (`execute-api`, client-facing `s3`, `bedrock-runtime`, `states`, `logs`, `kms`,
-`sts`) plus optional `monitoring`, each in every private subnet/AZ. A two-AZ
-deployment therefore has 14 billed endpoint-AZ units before `monitoring`.
+`sts`, `ssm` for the AI killswitch) plus optional `monitoring`, each in every
+private subnet/AZ. A two-AZ deployment therefore has 16 billed endpoint-AZ
+units before `monitoring`.
 Calculate the current GovCloud rate before provisioning; this is the dominant
 idle cost. Gateway endpoints (`s3`, `dynamodb`) remain free for Lambda traffic.
 
