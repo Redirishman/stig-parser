@@ -10,7 +10,7 @@ This directory is **infrastructure only** — the Python application lives in
 > **Status:** all modules authored — `network`, `storage`, `data`, `iam`,
 > `compute`, `orchestration`, `api`, `observability`, plus the `envs/example`
 > composition. `terraform fmt`, `terraform validate` and `checkov` pass
-> (448 passed / 0 failed / 54 skipped, every skip with a written reason).
+> (489 passed / 0 failed / 58 skipped, every skip with a written reason).
 >
 > **Applied and verified end-to-end in a real GovCloud account (2026-07-22,
 > `envs/army-dev`, us-gov-west-1).** All 147 resources converged, and a real
@@ -27,13 +27,14 @@ This directory is **infrastructure only** — the Python application lives in
 ## ⚠ Idle cost floor — read before provisioning
 
 The **fully-private** requirement forbids NAT and public edge, so every AWS
-service is reached through an **interface VPC endpoint**. Interface endpoints
-bill **hourly (~$7–8/mo each), regardless of usage**. With the ~6–7 endpoints
-this design needs (`execute-api`, `bedrock-runtime`, `states`, `logs`, `kms`,
-`sts`, +optional `monitoring`), the environment costs **~$50+/mo at zero
-traffic** — the dominant idle cost, exceeding Lambda. This is an accepted
-consequence of the private-boundary requirement, documented so the first bill
-is not a surprise. Gateway endpoints (`s3`, `dynamodb`) are free.
+service is reached through an **interface VPC endpoint**. PrivateLink bills each
+endpoint **per hour in every selected Availability Zone**, plus data processed,
+regardless of usage. This design creates seven required endpoint services
+(`execute-api`, client-facing `s3`, `bedrock-runtime`, `states`, `logs`, `kms`,
+`sts`) plus optional `monitoring`, each in every private subnet/AZ. A two-AZ
+deployment therefore has 14 billed endpoint-AZ units before `monitoring`.
+Calculate the current GovCloud rate before provisioning; this is the dominant
+idle cost. Gateway endpoints (`s3`, `dynamodb`) remain free for Lambda traffic.
 
 Smaller ongoing costs, all deliberate: VPC flow logs, CloudTrail S3 data events
 (one event per object read/write), and CloudWatch log retention (1 year).
@@ -70,7 +71,8 @@ placeholders); a real `apply` does. See spec §2.
 | D3 | Upstream auth identity header (or none) | `identity_header` | `""` (no identity recorded) |
 | D4 | Claude model ID in GovCloud Bedrock | `bedrock_model_id` | `""` — **AI is off until set** |
 | D5 | CUI retention — S3 lifecycle days, DynamoDB TTL days | `upload_retention_days`, `artifact_retention_days`, `job_ttl_days` | conservative placeholders |
-| D6 | Private-SPA serving mode | `spa_serving_mode` | `apigw_s3_proxy` |
+| D6 | Private-SPA serving mode and exact upload origin(s) | `spa_serving_mode`, `additional_upload_cors_origins` | `apigw_s3_proxy`, managed API origin only |
+| D7 | Private API client CIDRs and return-route owner/targets | `api_client_cidr_blocks`, `api_client_route_management`, `api_client_routes` | **no client or route-owner default** |
 
 **CUI note:** scan results and derived findings are treated as CUI. Retention and
 TTL values are a **records-policy decision**, not a convenience default — confirm
@@ -82,6 +84,32 @@ than a wildcard that would silently become live the day a model is enabled in
 the account), and the API reports the gate as `disabled-globally`. If
 `ai_killswitch_param` is set, its SSM parameter must read exactly `enabled` for
 AI to run; any other value — **or an unreadable parameter** — disables AI.
+
+**D7 / the organization owns the upstream network.** The `execute-api` endpoint
+has its own security group and accepts TCP/443 only from
+`api_client_cidr_blocks`; those CIDRs are never added to the Lambda-only KMS,
+STS, Bedrock, or other service endpoints. With route management set to `module`,
+`api_client_routes` creates exact private-subnet return routes through an
+already-attached TGW, VGW, or direct VPC peering connection. With `external`, an
+organization-managed stack (or an existing local/propagated route) must own all
+return routes. This stack deliberately does not create the VPN, Direct Connect,
+TGW/VGW attachment, reciprocal routes, or Route 53 Resolver infrastructure.
+
+**Private browser S3 path.** Lambda still uses the free S3 gateway endpoint.
+Browser presigned PUT/GET requests use a separate S3 interface endpoint whose
+security group admits only `api_client_cidr_blocks` and whose policy exposes only
+uploads and report downloads under `jobs/`. GovCloud does not support S3
+interface-endpoint private DNS, so the API signs endpoint-specific Regional URLs
+(`https://bucket.<vpce DNS name>/<bucket>/<key>`) with SigV4/path-style
+addressing. The signing role also requires `aws:SourceVpce`, so a copied URL is
+denied over public S3. Upload CORS permits only exact HTTPS origins, `PUT`, and
+`Content-Type`; it grants no S3 access. With `spa_serving_mode = "none"`, the
+external host must provide a same-origin SPA/API facade and be listed in
+`additional_upload_cors_origins`.
+
+**FIPS decision:** S3 interface endpoints do not support S3 FIPS endpoints. If
+the ATO requires the S3 FIPS hostname specifically for this browser data path,
+do not deploy this path until an approved proxy or other alternative is chosen.
 
 ---
 
@@ -121,6 +149,22 @@ The layer must be built against the same `python_runtime` the functions declare.
 
 ---
 
+## Application rollout safety
+
+The job record concurrency controls depend on every Lambda writer using the
+versioned conditional-update contract. Before the first deployment containing
+that contract, stop accepting new jobs and wait until all Step Functions
+executions have reached a terminal state **and** the longest configured Lambda
+stage timeout has elapsed. Deploy the API, parser, enricher, exporter, and error
+marker together, then resume submissions. A rolling deployment with active jobs
+can leave an old execution environment writing records unconditionally and can
+overwrite a cancellation or another terminal-state decision.
+
+Later deployments may roll normally only while all deployed versions continue
+to honor the same conditional-update contract.
+
+---
+
 ## Verification status
 
 All gates below were run locally through Docker (none of the tooling is installed
@@ -136,8 +180,9 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "/g/path/to/stig-parser/infra:/w" -w /w \
 |------|--------|
 | `terraform fmt -check -recursive` | clean |
 | `terraform validate` (8 modules + `envs/example`) | all pass |
+| `terraform test` (`modules/network`, `modules/iam`, `modules/compute`, `modules/api`) | 13 passed, **0 failed** |
 | `tflint` (aws ruleset, recursive) | clean — zero findings |
-| `checkov` | 448 passed, **0 failed**, 54 skipped |
+| `checkov` | 489 passed, **0 failed**, 58 skipped |
 | Leak scan | clean (verified it catches a planted value) |
 | `terraform plan` / `apply` | **never run** — needs GovCloud credentials |
 
@@ -158,20 +203,41 @@ substantive ones:
 - **`CKV_AWS_356` / `111` / `109` (wildcard resources)** — the Lambda ENI-attach
   permissions and the mandatory KMS key-policy root statement; neither accepts a
   resource ARN. Every other statement names exact ARNs.
-- **X-Ray checks** — off by design: it needs an extra ~$8/mo interface endpoint in
-  a VPC with no internet route.
+- **X-Ray checks** — off by design: it needs an additional billed `monitoring`
+  interface endpoint in every selected AZ in a VPC with no internet route.
 
 ---
 
 ## Before the first apply
 
-1. Make decisions **D1–D6** (table above), especially D5 with the ISSO.
+1. Make decisions **D1–D7** (table above), especially D5 with the ISSO.
 2. Build the dependency layer on Linux (`scripts/build-layer.sh`).
 3. Wire `alarm_actions` to a real SNS topic — otherwise the alarms evaluate but
    page nobody.
 4. Confirm `vpc_cidr` does not overlap anything reachable over the VPN.
-5. Security review (master spec §8).
-6. Expect the first `apply` to surface things `validate` cannot: IAM propagation
+5. Have the network team confirm the D7 next hop is attached, its route table has
+   reciprocal routes to `vpc_cidr`, and every approved client CIDR has a return
+   route. For `external` mode, verify those routes outside this state.
+6. Configure hybrid DNS so operator resolvers conditionally forward the private
+   `execute-api` name through an organization-managed Route 53 Resolver inbound
+   endpoint. Do not query the VPC resolver address directly from on premises.
+   The endpoint-specific S3 name resolves from Amazon's public DNS domain to the
+   interface endpoint's private IPs and does not use S3 private DNS in GovCloud.
+7. From a representative approved VPN/DX client:
+   - resolve the API and exported S3 endpoint hostnames to the expected private
+     endpoint ENIs;
+   - call `GET /config`;
+   - send an S3 CORS `OPTIONS` request and verify `200` plus the exact
+     `Access-Control-Allow-Origin`;
+   - complete a presigned upload and report download; and
+   - reuse the same signed URL from a disallowed/public path and verify
+     `AccessDenied`.
+8. Run a complete job and confirm Lambda S3/DynamoDB calls still traverse the
+   gateway endpoints; mocked Terraform cannot prove live routing or CORS
+   preflight behavior.
+9. Confirm the S3 PrivateLink non-FIPS limitation is acceptable to the ATO.
+10. Security review (master spec §8).
+11. Expect the first `apply` to surface things `validate` cannot: IAM propagation
    races, GovCloud service availability, and the SPA-proxy binary-media handling
    (D6 — see spec §6; the fallback modes exist for exactly this reason).
 
@@ -180,7 +246,9 @@ substantive ones:
 ## CI
 
 `.github/workflows/infra.yml`, on any change under `infra/`: `terraform fmt
--check`, `validate` (every module + env), `tflint`, `checkov`, and the leak scan.
+-check`, `validate` (every module + env), private client-path network/IAM,
+API-environment, and upload-CORS contract tests, `tflint`, `checkov`, and the
+leak scan.
 
 No `plan`/`apply` in public CI — that needs GovCloud credentials and a private
 runner with VPC reach (an open question for the org; spec §12).

@@ -56,14 +56,19 @@ module "storage" {
 module "network" {
   source = "../../modules/network"
 
-  name_prefix             = var.name_prefix
-  aws_region              = var.aws_region
-  vpc_cidr                = var.vpc_cidr
-  private_subnet_cidrs    = var.private_subnet_cidrs
-  kms_key_arn             = module.storage.kms_key_arn
-  enable_flow_logs        = var.enable_flow_logs
-  flow_log_retention_days = var.flow_log_retention_days
-  tags                    = var.tags
+  name_prefix                    = var.name_prefix
+  aws_region                     = var.aws_region
+  vpc_cidr                       = var.vpc_cidr
+  private_subnet_cidrs           = var.private_subnet_cidrs
+  api_client_cidr_blocks         = var.api_client_cidr_blocks
+  api_client_route_management    = var.api_client_route_management
+  api_client_routes              = var.api_client_routes
+  s3_client_uploads_bucket_arn   = module.storage.uploads_bucket_arn
+  s3_client_artifacts_bucket_arn = module.storage.artifacts_bucket_arn
+  kms_key_arn                    = module.storage.kms_key_arn
+  enable_flow_logs               = var.enable_flow_logs
+  flow_log_retention_days        = var.flow_log_retention_days
+  tags                           = var.tags
 }
 
 module "data" {
@@ -77,16 +82,18 @@ module "data" {
 module "iam" {
   source = "../../modules/iam"
 
-  name_prefix             = var.name_prefix
-  uploads_bucket_arn      = module.storage.uploads_bucket_arn
-  artifacts_bucket_arn    = module.storage.artifacts_bucket_arn
-  job_table_arn           = module.data.job_table_arn
-  kms_key_arn             = module.storage.kms_key_arn
-  state_machine_arn       = local.state_machine_arn
-  bedrock_model_id        = var.bedrock_model_id
-  bedrock_region          = var.bedrock_region
-  ai_killswitch_param_arn = local.ai_killswitch_param_arn
-  tags                    = var.tags
+  name_prefix                = var.name_prefix
+  uploads_bucket_arn         = module.storage.uploads_bucket_arn
+  artifacts_bucket_arn       = module.storage.artifacts_bucket_arn
+  api_s3_client_endpoint_id  = module.network.s3_client_endpoint_id
+  api_s3_gateway_endpoint_id = module.network.s3_gateway_endpoint_id
+  job_table_arn              = module.data.job_table_arn
+  kms_key_arn                = module.storage.kms_key_arn
+  state_machine_arn          = local.state_machine_arn
+  bedrock_model_id           = var.bedrock_model_id
+  bedrock_region             = var.bedrock_region
+  ai_killswitch_param_arn    = local.ai_killswitch_param_arn
+  tags                       = var.tags
 }
 
 module "compute" {
@@ -97,12 +104,13 @@ module "compute" {
   dependency_layer_zip = var.dependency_layer_zip
   python_runtime       = var.python_runtime
 
-  uploads_bucket    = module.storage.uploads_bucket
-  artifacts_bucket  = module.storage.artifacts_bucket
-  job_table_name    = module.data.job_table_name
-  job_ttl_days      = var.job_ttl_days
-  state_machine_arn = local.state_machine_arn
-  role_arns         = module.iam.role_arns
+  uploads_bucket          = module.storage.uploads_bucket
+  artifacts_bucket        = module.storage.artifacts_bucket
+  s3_presign_endpoint_url = module.network.s3_client_endpoint_url
+  job_table_name          = module.data.job_table_name
+  job_ttl_days            = var.job_ttl_days
+  state_machine_arn       = local.state_machine_arn
+  role_arns               = module.iam.role_arns
 
   subnet_ids        = module.network.private_subnet_ids
   security_group_id = module.network.lambda_security_group_id
@@ -131,14 +139,16 @@ module "orchestration" {
 module "api" {
   source = "../../modules/api"
 
-  name_prefix             = var.name_prefix
-  execute_api_endpoint_id = module.network.execute_api_endpoint_id
-  api_function_arn        = module.compute.api_function_arn
-  api_function_name       = module.compute.api_function_name
-  spa_serving_mode        = var.spa_serving_mode
-  kms_key_arn             = module.storage.kms_key_arn
-  log_retention_days      = var.log_retention_days
-  tags                    = var.tags
+  name_prefix                    = var.name_prefix
+  execute_api_endpoint_id        = module.network.execute_api_endpoint_id
+  api_function_arn               = module.compute.api_function_arn
+  api_function_name              = module.compute.api_function_name
+  spa_serving_mode               = var.spa_serving_mode
+  uploads_bucket_name            = module.storage.uploads_bucket
+  additional_upload_cors_origins = var.additional_upload_cors_origins
+  kms_key_arn                    = module.storage.kms_key_arn
+  log_retention_days             = var.log_retention_days
+  tags                           = var.tags
 }
 
 module "observability" {

@@ -49,12 +49,18 @@ def _safe_xml_parse(path: Path) -> etree._ElementTree:
     expansion. A fresh parser is created per call: lxml parser instances are
     not safe to share across the worker threads the web app spawns.
     """
+    # huge_tree is deliberately NOT enabled: it removes libxml2's structural
+    # safety limits (max depth ~256, max text-node size), which on untrusted
+    # uploads is a non-entity DoS vector — a deeply-nested document a few MB in
+    # size can overflow the C parser's stack and crash the worker. Real
+    # multi-MB compliance scans stay well within the default limits; a file that
+    # legitimately exceeds them fails loud as a catchable XMLSyntaxError, which
+    # the caller already handles.
     parser = etree.XMLParser(
         resolve_entities=False,
         no_network=True,
         dtd_validation=False,
         load_dtd=False,
-        huge_tree=True,  # real compliance scans run to several MB
     )
     return etree.parse(str(path), parser)
 

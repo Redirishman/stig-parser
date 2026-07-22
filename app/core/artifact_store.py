@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import boto3
-from botocore.config import Config as BotoConfig
+from botocore.config import Config
 
 
 @runtime_checkable
@@ -20,6 +20,7 @@ class ArtifactStore(Protocol):
     def put_bytes(self, key: str, data: bytes) -> None: ...
     def get_bytes(self, key: str) -> bytes: ...
     def exists(self, key: str) -> bool: ...
+    def size(self, key: str) -> int: ...
     def upload_from(self, key: str, path: Path) -> None: ...
     def download_to(self, key: str, path: Path) -> None: ...
     def presign_get(self, key: str, expires: int = 900) -> str: ...
@@ -55,6 +56,9 @@ class LocalArtifactStore:
         except ValueError:
             return False
 
+    def size(self, key: str) -> int:
+        return self._resolve(key).stat().st_size
+
     def upload_from(self, key: str, path: Path) -> None:
         self.put_bytes(key, Path(path).read_bytes())
 
@@ -78,15 +82,30 @@ class S3ArtifactStore:
     for the interface-endpoint host.
     """
 
-    def __init__(self, bucket: str, region: str, client: Any = None):
+    def __init__(
+        self,
+        bucket: str,
+        region: str,
+        client: Any = None,
+        presign_endpoint_url: str | None = None,
+        presign_client: Any = None,
+    ):
         self._bucket = bucket
-        # SigV4 is mandatory: presigned URLs for SSE-KMS buckets are rejected
-        # with InvalidArgument when signed with the legacy default (SigV2).
-        self._client = client or boto3.client(
-            "s3",
-            region_name=region,
-            config=BotoConfig(signature_version="s3v4"),
-        )
+        self._client = client or boto3.client("s3", region_name=region)
+        if presign_client is not None:
+            self._presign_client = presign_client
+        elif presign_endpoint_url:
+            self._presign_client = boto3.client(
+                "s3",
+                region_name=region,
+                endpoint_url=presign_endpoint_url,
+                config=Config(
+                    signature_version="s3v4",
+                    s3={"addressing_style": "path"},
+                ),
+            )
+        else:
+            self._presign_client = self._client
 
     def put_bytes(self, key: str, data: bytes) -> None:
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data)
@@ -106,6 +125,10 @@ class S3ArtifactStore:
                 return False
             raise
 
+    def size(self, key: str) -> int:
+        resp = self._client.head_object(Bucket=self._bucket, Key=key)
+        return int(resp["ContentLength"])
+
     def upload_from(self, key: str, path: Path) -> None:
         self._client.upload_file(str(path), self._bucket, key)
 
@@ -115,14 +138,14 @@ class S3ArtifactStore:
         self._client.download_file(self._bucket, key, str(dst))
 
     def presign_get(self, key: str, expires: int = 900) -> str:
-        return self._client.generate_presigned_url(
+        return self._presign_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self._bucket, "Key": key},
             ExpiresIn=expires,
         )
 
     def presign_put(self, key: str, expires: int = 900) -> str:
-        return self._client.generate_presigned_url(
+        return self._presign_client.generate_presigned_url(
             "put_object",
             Params={"Bucket": self._bucket, "Key": key},
             ExpiresIn=expires,

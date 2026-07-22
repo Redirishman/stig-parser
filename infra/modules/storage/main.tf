@@ -75,6 +75,14 @@ data "aws_iam_policy_document" "cmk" {
       type        = "Service"
       identifiers = ["cloudtrail.amazonaws.com"]
     }
+    # Confused-deputy guard: tie the grant to this account's own trail so a
+    # CloudTrail in another account cannot request a data key from this CMK
+    # (mirrors the AllowCloudWatchLogs statement's scoping above).
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
 }
 

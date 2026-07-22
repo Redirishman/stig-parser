@@ -16,6 +16,18 @@ bedrock_region = "us-gov-west-1"
 vpc_cidr             = "10.0.0.0/16"
 private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
 
+# (D7) Private operator path. Replace the example CIDR and next hop with values
+# approved by the network team. The TGW/VGW/peering attachment, its reciprocal
+# routes, and hybrid DNS forwarding are organization-managed prerequisites.
+api_client_cidr_blocks      = ["10.100.0.0/16"]
+api_client_route_management = "module" # module | external
+api_client_routes = {
+  operator_vpn = {
+    destination_cidr_block = "10.100.0.0/16"
+    transit_gateway_id     = "tgw-REPLACE_ME"
+  }
+}
+
 # (D5) CUI retention. These placeholders are deliberately conservative and are
 # NOT a records-policy recommendation — confirm with the ISSO / records officer.
 upload_retention_days   = 7   # raw scan results: shortest — no reason to keep them
@@ -37,12 +49,18 @@ bedrock_model_id = ""
 # run. Anything else — or an unreadable parameter — disables AI (fails closed).
 ai_killswitch_param = "" # e.g. "/stig-condenser/ai-enabled"
 
-# (D3) Upstream auth. The header is recorded on jobs for audit only; the API
-# never makes an authorization decision from it. Auth is enforced upstream.
+# (D3) Upstream auth. The trusted identity layer must inject this header. It is
+# recorded for audit and enforces defense-in-depth per-job ownership; primary
+# authentication remains upstream. Empty disables per-job ownership checks.
 identity_header = "" # e.g. "x-forwarded-user"
 
 # (D6) Private SPA serving: apigw_s3_proxy | lambda_served | none
 spa_serving_mode = "apigw_s3_proxy"
+
+# Managed SPA modes automatically allow the private API host to perform the
+# presigned S3 PUT. For `none`, list the exact HTTPS origin of the internal
+# same-origin SPA/API facade (no wildcard, path, or trailing slash).
+additional_upload_cors_origins = [] # e.g. ["https://stig.internal.example"]
 
 # Alarms fire into the void until an SNS topic is wired up. Fine for a first
 # apply; not fine for production.
