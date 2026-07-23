@@ -92,6 +92,17 @@ data "archive_file" "source" {
     "tmp",
     ".git",
     ".github",
+    # The React SPA is deployed separately (built + synced to S3); it and its
+    # node_modules have no place in a Python Lambda and, because node_modules
+    # holds platform-specific binaries, they make the source hash differ per
+    # machine — the churn that made every plan noisy.
+    "frontend",
+    ".pytest_cache",
+    ".claude",
+    # Root-level ops files: not part of the Lambda runtime, and the playbook
+    # carries account-specific detail that must not ride into the function zip.
+    "deploy.sh",
+    "GOVCLOUD-PLAYBOOK.md",
     "app/static",
     "app/templates",
     "__pycache__",
