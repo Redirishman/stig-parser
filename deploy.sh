@@ -2,7 +2,7 @@
 #
 # deploy.sh — one-command deploy for stig-parser into a GovCloud environment.
 #
-#   ./deploy.sh <env> [flags]        e.g.  ./deploy.sh army-dev
+#   ./deploy.sh [env] [flags]        e.g.  ./deploy.sh   (auto-selects the one configured env)
 #
 # Phases (each can be trimmed with a flag):
 #   0 guards    account + toolchain + filesystem safety checks
@@ -20,8 +20,10 @@
 #   --yes          skip the interactive apply prompt (also: AUTO_APPROVE=1)
 #   -h, --help     show this help
 #
-# You always run this from the repo root: ./deploy.sh <env>. You never cd into
-# the env folder — the script reaches into it for you.
+# You always run this from the repo root: ./deploy.sh. With no env name it uses
+# the single configured environment (the one with a real terraform.tfvars); pass
+# a name only to pick among several. You never cd into the env folder — the
+# script reaches into it for you.
 #
 # Per-env config is OPTIONAL. With no config, the account guard resolves the
 # account and asks you to confirm it. To make the guard silent + strict, copy
@@ -52,10 +54,10 @@ cd "$REPO_ROOT"
 
 # --- parse args ------------------------------------------------------------
 ENV=""
-PLAN_ONLY=0; INFRA_ONLY=0; SKIP_LAYER=0; SKIP_SPA=0
+PLAN_ONLY=0; INFRA_ONLY=0; SKIP_LAYER=0; SKIP_SPA=0; AUTO_ENV=0
 AUTO_APPROVE="${AUTO_APPROVE:-0}"
 
-usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '3,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 for arg in "$@"; do
   case "$arg" in
@@ -69,7 +71,21 @@ for arg in "$@"; do
     *)            [[ -z "$ENV" ]] && ENV="$arg" || die "unexpected argument: $arg" ;;
   esac
 done
-[[ -n "$ENV" ]] || { warn "no environment given"; usage 1; }
+# No env name given: auto-select the single configured environment — the one
+# with a real (gitignored) terraform.tfvars. Bare `./deploy.sh` just works when
+# one env is set up; it asks for a name only when several are.
+if [[ -z "$ENV" ]]; then
+  configured=()
+  for _tfvars in infra/envs/*/terraform.tfvars; do
+    [[ -f "$_tfvars" ]] || continue
+    configured+=( "$(basename "$(dirname "$_tfvars")")" )
+  done
+  case ${#configured[@]} in
+    1) ENV="${configured[0]}"; AUTO_ENV=1 ;;
+    0) die "no configured environment found (no infra/envs/*/terraform.tfvars). Set one up, or pass a name: ./deploy.sh <env>" ;;
+    *) die "multiple configured environments (${configured[*]}). Pass one: ./deploy.sh <env>" ;;
+  esac
+fi
 
 ENV_DIR="infra/envs/${ENV}"
 [[ -d "$ENV_DIR" ]] || die "no such environment: ${ENV_DIR}"
@@ -78,6 +94,7 @@ ENV_DIR="infra/envs/${ENV}"
 # Phase 0 — guards
 # ===========================================================================
 step "Phase 0 · Guards (${ENV})"
+(( AUTO_ENV )) && info "auto-selected the only configured environment: ${ENV}"
 
 # 0a. Never run from a Windows mount under WSL — npm/docker there corrupts
 #     Lambda artifacts (a hazard both sibling AIE stacks learned the hard way).
