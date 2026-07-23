@@ -90,6 +90,9 @@ fi
 ENV_DIR="infra/envs/${ENV}"
 [[ -d "$ENV_DIR" ]] || die "no such environment: ${ENV_DIR}"
 
+# Never leave a saved plan lying around, on any exit path (plan-only, abort, error).
+trap 'rm -f "${ENV_DIR}/deploy.tfplan"' EXIT
+
 # ===========================================================================
 # Phase 0 — guards
 # ===========================================================================
@@ -118,7 +121,7 @@ export AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
 
 # 0c. Force profile-based auth: stray static/assumed-role keys in the shell
 #     (our whole terraform-role saga) silently target the wrong identity.
-if [[ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SESSION_TOKEN:-}" ]]; then
+if [[ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_SESSION_TOKEN:-}" ]]; then
   warn "unsetting stray AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN so profile '${AWS_PROFILE}' is used"
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 fi
@@ -145,10 +148,11 @@ if [[ -n "${EXPECTED_ACCOUNT:-}" ]]; then
   ok "account ${ACCOUNT} (matches EXPECTED_ACCOUNT)"
 else
   warn "account is ${ACCOUNT} — no EXPECTED_ACCOUNT set to check it against"
-  if [[ "$AUTO_APPROVE" != "1" ]]; then
-    read -r -p "    Deploy '${ENV}' into account ${ACCOUNT}? [y/N] " ans || true
-    [[ "$ans" =~ ^[yY]([eE][sS])?$ ]] || die "aborted."
+  if [[ "$AUTO_APPROVE" == "1" ]]; then
+    die "refusing to auto-approve into an unverified account. Set EXPECTED_ACCOUNT in ${DEPLOY_ENV_FILE}, or drop --yes to confirm the account interactively."
   fi
+  read -r -p "    Deploy '${ENV}' into account ${ACCOUNT}? [y/N] " ans || true
+  [[ "$ans" =~ ^[yY]([eE][sS])?$ ]] || die "aborted."
 fi
 
 # ===========================================================================
@@ -189,8 +193,10 @@ fi
 step "Phase 3 · Terraform (${ENV})"
 tf() { terraform -chdir="$ENV_DIR" "$@"; }
 
-info "init..."; tf init -input=false >/dev/null && ok "backend initialized"
-info "validate..."; tf validate >/dev/null && ok "configuration valid"
+info "init..."; tf init -input=false >/dev/null || die "terraform init failed."
+ok "backend initialized"
+info "validate..."; tf validate >/dev/null || die "terraform validate failed."
+ok "configuration valid"
 
 info "plan..."
 set +e
@@ -226,10 +232,11 @@ if [[ -n "$killswitch" ]]; then
     cur="$(aws ssm get-parameter --name "$killswitch" --query Parameter.Value --output text)"
     ok "killswitch ${killswitch} exists (value: ${cur})"
     [[ "$cur" == "enabled" ]] || warn "killswitch is not 'enabled' — AI stays OFF until it reads exactly 'enabled'"
-  else
-    aws ssm put-parameter --name "$killswitch" --type String --value enabled \
-      --description "stig-parser AI killswitch: exactly 'enabled' turns AI on; anything else fails closed" >/dev/null
+  elif aws ssm put-parameter --name "$killswitch" --type String --value enabled \
+    --description "stig-parser AI killswitch: exactly 'enabled' turns AI on; anything else fails closed" >/dev/null 2>&1; then
     ok "created killswitch ${killswitch} = enabled"
+  else
+    warn "could not read or create killswitch ${killswitch} — set it to 'enabled' manually, or AI stays OFF"
   fi
 fi
 
