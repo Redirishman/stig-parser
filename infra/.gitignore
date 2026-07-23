@@ -22,6 +22,10 @@
 backend.tf
 !backend.tf.example
 
+# Per-env deploy settings (carry the account id — see deploy.sh).
+deploy.env
+!deploy.env.example
+
 # Build artifacts: the dependency layer zip (~30 MB of compiled wheels) and the
 # source zip Terraform packages. Both are reproducible from source.
 build/
