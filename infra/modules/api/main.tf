@@ -52,9 +52,9 @@ resource "aws_api_gateway_rest_api" "this" {
 # from other VPC endpoints that resolve the same private DNS name.
 data "aws_iam_policy_document" "resource_policy" {
   statement {
-    sid       = "AllowInvokeFromOurVpceOnly"
-    effect    = "Allow"
-    actions   = ["execute-api:Invoke"]
+    sid     = "AllowInvokeFromOurVpceOnly"
+    effect  = "Allow"
+    actions = ["execute-api:Invoke"]
     # Full ARN, not the "execute-api:/*" shorthand: API Gateway stores the
     # expanded ARN, so the shorthand re-diffs on every plan forever.
     resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]
@@ -70,9 +70,9 @@ data "aws_iam_policy_document" "resource_policy" {
   }
 
   statement {
-    sid       = "DenyInvokeFromAnywhereElse"
-    effect    = "Deny"
-    actions   = ["execute-api:Invoke"]
+    sid     = "DenyInvokeFromAnywhereElse"
+    effect  = "Deny"
+    actions = ["execute-api:Invoke"]
     # Full ARN, not the "execute-api:/*" shorthand: API Gateway stores the
     # expanded ARN, so the shorthand re-diffs on every plan forever.
     resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]

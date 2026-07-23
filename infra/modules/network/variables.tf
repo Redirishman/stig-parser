@@ -149,7 +149,7 @@ variable "interface_endpoint_services" {
   # ssm is required whenever ai_killswitch_param is set: the API and enricher
   # read the killswitch parameter at request time, and without an endpoint the
   # call hangs to the 29s function timeout in this zero-egress VPC.
-  default     = ["bedrock-runtime", "states", "logs", "kms", "sts", "ssm"]
+  default = ["bedrock-runtime", "states", "logs", "kms", "sts", "ssm"]
 
   validation {
     condition     = !contains(var.interface_endpoint_services, "execute-api")
