@@ -7,18 +7,23 @@
 # Phases (each can be trimmed with a flag):
 #   0 guards    account + toolchain + filesystem safety checks
 #   1 preflight the gitignored per-env files exist (backend.tf, terraform.tfvars)
-#   2 layer     build the Lambda dependency layer (Docker/Linux)   [--skip-layer]
+#   2 layer     reuse the Lambda dependency layer (builds only if missing)
 #   3 infra     terraform init/validate/plan -> y/N gate -> apply  [--plan-only]
 #   4 spa       build the React bundle and sync it to the SPA bucket  [--skip-spa]
 #   5 smoke     invoke the API Lambda's GET /config and check 200
 #
+# The dependency layer is REUSED by default (no Docker needed). It builds only
+# when infra/build/deps-layer.zip is missing, or when you pass --rebuild-layer
+# after bumping lxml/openpyxl. So a normal deploy is just: ./deploy.sh
+#
 # Flags:
-#   --plan-only    stop after `terraform plan` (never applies; implies no spa/smoke)
-#   --infra-only   run guards + preflight + layer + infra, skip spa + smoke
-#   --skip-layer   reuse the existing infra/build/deps-layer.zip
-#   --skip-spa     do not build or sync the frontend
-#   --yes          skip the interactive apply prompt (also: AUTO_APPROVE=1)
-#   -h, --help     show this help
+#   --plan-only     stop after `terraform plan` (never applies; implies no spa/smoke)
+#   --infra-only    run guards + preflight + layer + infra, skip spa + smoke
+#   --rebuild-layer force a fresh Docker build of the dependency layer
+#   --skip-layer    never build; fail if the layer zip is missing (rarely needed)
+#   --skip-spa      do not build or sync the frontend
+#   --yes           skip the interactive apply prompt (also: AUTO_APPROVE=1)
+#   -h, --help      show this help
 #
 # You always run this from the repo root: ./deploy.sh. With no env name it uses
 # the single configured environment (the one with a real terraform.tfvars); pass
@@ -54,7 +59,7 @@ cd "$REPO_ROOT"
 
 # --- parse args ------------------------------------------------------------
 ENV=""
-PLAN_ONLY=0; INFRA_ONLY=0; SKIP_LAYER=0; SKIP_SPA=0; AUTO_ENV=0
+PLAN_ONLY=0; INFRA_ONLY=0; SKIP_LAYER=0; SKIP_SPA=0; AUTO_ENV=0; REBUILD_LAYER=0
 AUTO_APPROVE="${AUTO_APPROVE:-0}"
 
 usage() { sed -n '3,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -63,7 +68,8 @@ for arg in "$@"; do
   case "$arg" in
     --plan-only)  PLAN_ONLY=1 ;;
     --infra-only) INFRA_ONLY=1 ;;
-    --skip-layer) SKIP_LAYER=1 ;;
+    --skip-layer)    SKIP_LAYER=1 ;;
+    --rebuild-layer) REBUILD_LAYER=1 ;;
     --skip-spa)   SKIP_SPA=1 ;;
     --yes|-y)     AUTO_APPROVE=1 ;;
     -h|--help)    usage 0 ;;
@@ -173,18 +179,28 @@ tfvar() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"]*\)\
 # ===========================================================================
 # Phase 2 — dependency layer
 # ===========================================================================
+# The dependency layer changes only when lxml/openpyxl are bumped, so the
+# default is to REUSE an existing zip — no Docker needed on a normal deploy.
+# It builds automatically only when the zip is missing, or on --rebuild-layer.
 LAYER_ZIP="infra/build/deps-layer.zip"
-if (( SKIP_LAYER )); then
-  step "Phase 2 · Layer (skipped)"
-  [[ -f "$LAYER_ZIP" ]] || die "--skip-layer but ${LAYER_ZIP} does not exist. Build it once without the flag."
-  ok "reusing existing ${LAYER_ZIP}"
-else
-  step "Phase 2 · Dependency layer"
-  need docker "the layer must be built on Linux; install Docker or pass --skip-layer if the zip is current"
-  runtime="$(tfvar python_runtime)"; runtime="${runtime:-python3.12}"
+build_layer() {
+  need docker "the layer must be built on Linux; run on a Docker host, or copy an existing ${LAYER_ZIP} onto this machine"
+  local runtime; runtime="$(tfvar python_runtime)"; runtime="${runtime:-python3.12}"
   info "building ${LAYER_ZIP} for ${runtime} (Docker)..."
   ./infra/scripts/build-layer.sh "$runtime"
   ok "layer built"
+}
+if (( REBUILD_LAYER )); then
+  step "Phase 2 · Dependency layer (rebuild requested)"
+  build_layer
+elif [[ -f "$LAYER_ZIP" ]]; then
+  step "Phase 2 · Dependency layer"
+  ok "reusing existing ${LAYER_ZIP} (pass --rebuild-layer after changing deps)"
+elif (( SKIP_LAYER )); then
+  die "--skip-layer but ${LAYER_ZIP} is missing — build it once (needs Docker) or copy it in."
+else
+  step "Phase 2 · Dependency layer (first build)"
+  build_layer
 fi
 
 # ===========================================================================
