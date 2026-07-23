@@ -98,7 +98,6 @@ data "archive_file" "source" {
     # machine — the churn that made every plan noisy.
     "frontend",
     ".pytest_cache",
-    ".claude",
     # Root-level ops files: not part of the Lambda runtime, and the playbook
     # carries account-specific detail that must not ride into the function zip.
     "deploy.sh",
