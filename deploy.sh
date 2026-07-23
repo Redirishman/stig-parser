@@ -20,10 +20,16 @@
 #   --yes          skip the interactive apply prompt (also: AUTO_APPROVE=1)
 #   -h, --help     show this help
 #
-# Per-env config is sourced from  infra/envs/<env>/deploy.env  (gitignored):
+# You always run this from the repo root: ./deploy.sh <env>. You never cd into
+# the env folder — the script reaches into it for you.
+#
+# Per-env config is OPTIONAL. With no config, the account guard resolves the
+# account and asks you to confirm it. To make the guard silent + strict, copy
+# infra/envs/<env>/deploy.env.example to infra/envs/<env>/deploy.env (gitignored):
 #   AWS_PROFILE=...  AWS_REGION=...  EXPECTED_ACCOUNT=...
-# Copy infra/envs/<env>/deploy.env.example to create it. No account-specific
-# value is ever hard-coded here — this file is tracked in a public repo.
+# It sits beside backend.tf/terraform.tfvars because the account is a per-env
+# fact (army-dev and a future prod may be different accounts). No account value
+# is ever hard-coded here — this repo is public.
 
 set -euo pipefail
 
@@ -81,14 +87,13 @@ if [[ "$REPO_ROOT" == /mnt/* && "${ALLOW_MNT:-0}" != "1" ]]; then
     Override at your own risk with ALLOW_MNT=1."
 fi
 
-# 0b. Per-env config (gitignored; keeps account IDs out of this public repo).
+# 0b. Optional per-env config (gitignored). Absent is fine — the account guard
+#     below just confirms the resolved account instead of hard-checking it.
 DEPLOY_ENV_FILE="${ENV_DIR}/deploy.env"
 if [[ -f "$DEPLOY_ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$DEPLOY_ENV_FILE"
   ok "loaded ${DEPLOY_ENV_FILE}"
-else
-  warn "no ${DEPLOY_ENV_FILE} — using defaults; copy deploy.env.example to pin the account"
 fi
 AWS_PROFILE="${AWS_PROFILE:-army-govcloud}"
 AWS_REGION="${AWS_REGION:-us-gov-west-1}"
