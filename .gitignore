@@ -35,6 +35,3 @@ Thumbs.db
 # Secrets
 .env
 *.local
-
-# Local tool/editor state (never commit or ship)
-.claude/
