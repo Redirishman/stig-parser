@@ -33,7 +33,7 @@ Additional constraints captured during design:
 - **Fully private ⇒ no CloudFront** (CloudFront is a public edge service). The React SPA is served from private S3 via an S3 interface VPC endpoint behind the Private API Gateway.
 - **Lambda runs inside the VPC** (private subnets, no Internet Gateway, no NAT). All AWS service access is via **VPC endpoints**.
 - **Bedrock is reached via an interface VPC endpoint (PrivateLink).** Finding data never leaves the VPC boundary.
-- **Bedrock in GovCloud lives in `us-gov-west-1`.** The exact available Claude model ID must be confirmed against `us-gov-west-1` Bedrock at implementation time (do not hard-code an assumed ID).
+- **Bedrock in GovCloud lives in `us-gov-west-1`.** The exact available foundation model ID must be confirmed against `us-gov-west-1` Bedrock at implementation time (do not hard-code an assumed ID).
 
 ---
 
@@ -52,7 +52,7 @@ Serverless, fully-private, event-driven. The existing deterministic parsing/expo
 | **Stage Lambdas** | `parser`, `enricher` (Bedrock), `exporter`. Thin handlers wrapping the existing `parsers/`, `processors/`, `exporters/` Python modules. |
 | **DynamoDB job table** | Lightweight job/status record: `jobId`, `status`, S3 keys, `error`, timestamps, TTL for auto-cleanup. |
 | **S3 buckets** | `uploads` (input scans) and `artifacts` (generated Excel + intermediate normalized findings JSON). SSE-KMS with a customer-managed key, block-public, lifecycle expiry. |
-| **Bedrock** | Reached via interface VPC endpoint. `bedrock-runtime:InvokeModel` with a Claude model (GovCloud model ID confirmed at impl time). |
+| **Bedrock** | Reached via interface VPC endpoint. `bedrock-runtime:InvokeModel` with a foundation model (GovCloud model ID confirmed at impl time). |
 | **VPC** | Private subnets, no IGW/NAT. Interface endpoints: `execute-api`, `bedrock-runtime`, `states`, `logs`, `kms`, `sts`. Gateway endpoints: `s3`, `dynamodb`. |
 | **IAM** | Least-privilege role per Lambda. All ARNs use the `aws-us-gov` partition. |
 | **Observability** | CloudWatch logs + metrics; optional X-Ray tracing; CloudTrail S3 data events for audit. |
@@ -88,7 +88,7 @@ Serverless, fully-private, event-driven. The existing deterministic parsing/expo
   - **POA&M drafting** — Plan of Action & Milestones entries (mitigation, milestones, dates) from failed findings.
   - **Scan summary** — executive compliance-posture summary across all findings.
   - **Categorize / dedupe** — semantic clustering and duplicate reconciliation across scanners.
-- **Model access:** `bedrock-runtime:InvokeModel` on a Claude model in `us-gov-west-1`, via the Bedrock interface VPC endpoint. Prompt content = finding text; it stays inside the VPC via PrivateLink. Bedrock does not train on invocation data.
+- **Model access:** `bedrock-runtime:InvokeModel` on a foundation model in `us-gov-west-1`, via the Bedrock interface VPC endpoint. Prompt content = finding text; it stays inside the VPC via PrivateLink. Bedrock does not train on invocation data.
 
 ### 4.1 Determinism & provenance (hard requirements for #4)
 
@@ -179,7 +179,7 @@ Each sub-project gets its own implementation spec → plan → build cycle. This
 
 ## 12. Open Items (resolve at implementation time)
 
-- Confirm the exact Claude model ID available in `us-gov-west-1` Bedrock.
+- Confirm the exact foundation model ID available in `us-gov-west-1` Bedrock.
 - Confirm GovCloud region split (West vs East) for non-Bedrock services per org policy.
 - Confirm upstream auth mechanism specifics (VPN + IdP / CAC) and whether an identity header is passed to the app.
 - Confirm org standards for Terraform state backend and CI runner placement (must reach GovCloud).

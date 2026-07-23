@@ -74,7 +74,7 @@ placeholders); a real `apply` does. See spec §2.
 | D1 | Region split (West/East) | `aws_region`, `bedrock_region` | both `us-gov-west-1` |
 | D2 | Remote state backend (bucket / lock table / KMS) | `envs/*/backend.tf` | placeholders in `backend.tf.example` |
 | D3 | Upstream auth identity header (or none) | `identity_header` | `""` (no identity recorded) |
-| D4 | Claude model ID in GovCloud Bedrock | `bedrock_model_id` | `""` — **AI is off until set** |
+| D4 | foundation model ID in GovCloud Bedrock | `bedrock_model_id` | `""` — **AI is off until set** |
 | D5 | CUI retention — S3 lifecycle days, DynamoDB TTL days | `upload_retention_days`, `artifact_retention_days`, `job_ttl_days` | conservative placeholders |
 | D6 | Private-SPA serving mode and exact upload origin(s) | `spa_serving_mode`, `additional_upload_cors_origins` | `apigw_s3_proxy`, managed API origin only |
 | D7 | Private API client CIDRs and return-route owner/targets | `api_client_cidr_blocks`, `api_client_route_management`, `api_client_routes` | **no client or route-owner default** |

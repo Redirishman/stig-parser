@@ -28,7 +28,7 @@ These are the master-doc §12 open items. **None block *authoring* the modules**
 | D1 | Region split (West vs East for non-Bedrock services) | Org cloud team | `var.aws_region`, `var.bedrock_region` | `us-gov-west-1` both |
 | D2 | Remote state backend (bucket, lock table, KMS key) | Org cloud team | `backend "s3"` block in `envs/*/backend.tf` | placeholders + `.example` |
 | D3 | Upstream auth: identity header name, or none | ISSO / network | `var.identity_header` (API GW → Lambda mapping) | `"x-forwarded-user"` |
-| D4 | Claude model ID in `us-gov-west-1` Bedrock | Confirm at #4 | `var.bedrock_model_id` | `""` (AI off until set) |
+| D4 | foundation model ID in `us-gov-west-1` Bedrock | Confirm at #4 | `var.bedrock_model_id` | `""` (AI off until set) |
 | D5 | CUI marking + retention (S3 lifecycle days, DynamoDB TTL days) | ISSO / records | `var.artifact_retention_days`, `var.job_ttl_days` | conservative placeholders, commented "policy decision" |
 | D6 | Private-SPA serving path and exact browser upload origin(s) | This sub-project | `var.spa_serving_mode`, `var.additional_upload_cors_origins` | `"apigw_s3_proxy"`; managed API origin only (see §6) |
 | D7 | Approved private client CIDRs and return-route ownership/targets | Org network team | `var.api_client_cidr_blocks`, `var.api_client_route_management`, `var.api_client_routes` | no client or route-owner default |
