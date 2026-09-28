@@ -125,7 +125,16 @@ export default function App() {
   return (
     <div className="container">
       <header>
-        <h1>STIG Compliance Parser</h1>
+        <p className="eyebrow">Compliance Tooling</p>
+        <div className="brandline">
+          <span className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2 4 5v6c0 4.5 3.2 7.9 8 9 4.8-1.1 8-4.5 8-9V5z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+          </span>
+          <h1>STIG Compliance Parser</h1>
+        </div>
         <p className="subtitle">
           Upload scan results to generate a consolidated findings report. SCC,
           Evaluate-STIG, and Nessus files are self-contained — no separate
