@@ -1,10 +1,23 @@
-"""Tests for app.processors.delta — baseline-vs-current comparison."""
+"""Tests for app.processors.delta — baseline-vs-current comparison.
+
+Coverage semantics follow the design spec's Revision 2 (2026-09-28): host and
+STIG coverage is passed in explicitly (built by parse_stage from every parsed
+row plus one pair per scan file), never derived from the actionable finding
+lists. Every ``compute_delta`` call here therefore carries explicit
+``baseline_coverage`` / ``current_coverage``; ``cov()`` builds them for the
+simple cases where every scanned pair still has at least one finding.
+"""
 from __future__ import annotations
 
 import logging
 
 from app.parsers.base import Finding
-from app.processors.delta import DeltaFinding, DeltaResult, compute_delta
+from app.processors.delta import (
+    DELTA_STATUSES,
+    DeltaFinding,
+    DeltaResult,
+    compute_delta,
+)
 
 
 def _finding(
@@ -13,9 +26,10 @@ def _finding(
     status: str = "Open",
     severity: str = "CAT II",
     rule_id: str = "SV-1r1_rule",
+    stig_title: str = "Win2022 STIG",
 ) -> Finding:
     return Finding(
-        stig_title="Win2022 STIG",
+        stig_title=stig_title,
         vuln_id=vuln_id,
         rule_id=rule_id,
         severity=severity,
@@ -27,10 +41,21 @@ def _finding(
     )
 
 
+def cov(findings: list[Finding]) -> set[tuple[str, str]]:
+    """Coverage pairs implied by *findings*.
+
+    Only valid for the simple cases where every scanned (host, STIG) pair
+    still has at least one actionable finding. A fully remediated host or
+    STIG has no findings left and must be added to the coverage set by hand
+    — that gap is exactly the bug Revision 2 fixes.
+    """
+    return {(f.server, f.stig_title) for f in findings}
+
+
 def _by_status(result: DeltaResult) -> dict[str, list[DeltaFinding]]:
-    out: dict[str, list[DeltaFinding]] = {"New": [], "Resolved": [], "Persisting": []}
+    out: dict[str, list[DeltaFinding]] = {s: [] for s in DELTA_STATUSES}
     for f in result.findings:
-        out[f.delta_status].append(f)
+        out[f.delta_status].append(f)  # KeyError on an unknown status
     return out
 
 
@@ -38,7 +63,9 @@ class TestClassificationSameHost:
     def test_persisting_when_in_both(self):
         base = [_finding("V-1")]
         curr = [_finding("V-1")]
-        buckets = _by_status(compute_delta(base, curr))
+        buckets = _by_status(
+            compute_delta(base, curr, baseline_coverage=cov(base), current_coverage=cov(curr))
+        )
         assert len(buckets["Persisting"]) == 1
         assert buckets["New"] == []
         assert buckets["Resolved"] == []
@@ -46,7 +73,9 @@ class TestClassificationSameHost:
     def test_new_when_only_current(self):
         base = [_finding("V-1")]
         curr = [_finding("V-1"), _finding("V-2")]
-        buckets = _by_status(compute_delta(base, curr))
+        buckets = _by_status(
+            compute_delta(base, curr, baseline_coverage=cov(base), current_coverage=cov(curr))
+        )
         new = buckets["New"]
         assert len(new) == 1
         assert new[0].vuln_id == "V-2"
@@ -56,7 +85,9 @@ class TestClassificationSameHost:
     def test_resolved_when_only_baseline(self):
         base = [_finding("V-1"), _finding("V-2")]
         curr = [_finding("V-1")]
-        buckets = _by_status(compute_delta(base, curr))
+        buckets = _by_status(
+            compute_delta(base, curr, baseline_coverage=cov(base), current_coverage=cov(curr))
+        )
         resolved = buckets["Resolved"]
         assert len(resolved) == 1
         assert resolved[0].vuln_id == "V-2"
@@ -65,38 +96,275 @@ class TestClassificationSameHost:
 
 
 class TestCoverageScoping:
-    def test_baseline_only_host_not_counted_resolved(self):
-        # SERVER02 present in baseline only -> its findings are NOT resolved
+    def test_baseline_only_host_is_not_rescanned_never_resolved(self):
+        # SERVER02 present in baseline coverage only -> its findings are
+        # tagged Not re-scanned (kept on the report), never Resolved.
         base = [_finding("V-1", "SERVER01"), _finding("V-9", "SERVER02")]
         curr = [_finding("V-1", "SERVER01")]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         buckets = _by_status(result)
-        assert [f.vuln_id for f in buckets["Resolved"]] == []
+        assert buckets["Resolved"] == []
+        assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-9"]
+        assert buckets["Not re-scanned"][0].server == "SERVER02"
         assert result.only_baseline_hosts == {"SERVER02"}
         assert result.common_hosts == {"SERVER01"}
-        assert all(f.server != "SERVER02" for f in result.findings)
 
-    def test_current_only_host_all_new(self):
+    def test_current_only_host_is_newly_scanned_never_new(self):
         base = [_finding("V-1", "SERVER01")]
         curr = [_finding("V-1", "SERVER01"), _finding("V-5", "SERVER03")]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         buckets = _by_status(result)
-        new_on_new_host = [f for f in buckets["New"] if f.server == "SERVER03"]
-        assert len(new_on_new_host) == 1
+        assert buckets["New"] == []
+        assert [f.vuln_id for f in buckets["Newly scanned"]] == ["V-5"]
+        assert buckets["Newly scanned"][0].server == "SERVER03"
         assert result.only_current_hosts == {"SERVER03"}
 
     def test_resolved_only_on_common_host(self):
         base = [_finding("V-1", "SERVER01"), _finding("V-2", "SERVER01")]
         curr = [_finding("V-1", "SERVER01")]
-        buckets = _by_status(compute_delta(base, curr))
+        buckets = _by_status(
+            compute_delta(base, curr, baseline_coverage=cov(base), current_coverage=cov(curr))
+        )
         assert [f.vuln_id for f in buckets["Resolved"]] == ["V-2"]
+
+
+class TestCoverageFromScans:
+    """Revision 2: coverage is per (host, STIG) pair and comes from the scans,
+    not from the actionable finding lists. These encode the live defect —
+    a STIG that was not re-scanned reported as Resolved, and a fully
+    remediated host vanishing from the report."""
+
+    def test_delta_statuses_constant(self):
+        assert DELTA_STATUSES == (
+            "New", "Resolved", "Persisting", "Not re-scanned", "Newly scanned",
+        )
+
+    def test_fully_remediated_host_is_all_resolved(self):
+        # HOST-A has no findings left, but the current scan set DID scan it
+        # (its pair is in current_coverage) -> both baseline findings are
+        # Resolved. Old behaviour: HOST-A was invisible and dropped.
+        base = [_finding("V-1", "HOST-A"), _finding("V-2", "HOST-A")]
+        curr: list[Finding] = []
+        result = compute_delta(
+            base, curr,
+            baseline_coverage=cov(base),
+            current_coverage={("HOST-A", "Win2022 STIG")},
+        )
+        buckets = _by_status(result)
+        assert sorted(f.vuln_id for f in buckets["Resolved"]) == ["V-1", "V-2"]
+        assert len(result.findings) == 2
+        assert result.common_hosts == {"HOST-A"}
+        assert result.only_baseline_hosts == set()
+        assert result.not_rescanned_pairs == set()
+
+    def test_stig_not_rescanned_is_not_resolved(self):
+        # HOST-A is in both sets via Win2022, but the Edge STIG scan was
+        # left out of the current set -> its findings are Not re-scanned,
+        # zero Resolved. Old behaviour: 'Resolved' (false remediation claim).
+        edge = "Microsoft Edge STIG SCAP Benchmark"
+        base = [
+            _finding("V-1", "HOST-A"),
+            _finding("V-7", "HOST-A", stig_title=edge),
+            _finding("V-8", "HOST-A", stig_title=edge),
+        ]
+        curr = [_finding("V-1", "HOST-A")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert sorted(f.vuln_id for f in buckets["Not re-scanned"]) == ["V-7", "V-8"]
+        assert len(buckets["Persisting"]) == 1
+        assert result.not_rescanned_pairs == {("HOST-A", edge)}
+        assert result.newly_scanned_pairs == set()
+        assert result.common_hosts == {"HOST-A"}
+        assert result.only_baseline_hosts == set()
+
+    def test_newly_scanned_stig_is_not_new(self):
+        edge = "Microsoft Edge STIG SCAP Benchmark"
+        base = [_finding("V-1", "HOST-A")]
+        curr = [
+            _finding("V-1", "HOST-A"),
+            _finding("V-7", "HOST-A", stig_title=edge),
+        ]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["New"] == []
+        assert [f.vuln_id for f in buckets["Newly scanned"]] == ["V-7"]
+        assert result.newly_scanned_pairs == {("HOST-A", edge)}
+        assert result.not_rescanned_pairs == set()
+
+    def test_host_only_in_current_coverage_is_all_newly_scanned(self):
+        base = [_finding("V-1", "HOST-A")]
+        curr = [
+            _finding("V-1", "HOST-A"),
+            _finding("V-2", "HOST-B"),
+            _finding("V-3", "HOST-B"),
+        ]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["New"] == []
+        assert sorted(f.vuln_id for f in buckets["Newly scanned"]) == ["V-2", "V-3"]
+        assert result.only_current_hosts == {"HOST-B"}
+        assert result.newly_scanned_pairs == {("HOST-B", "Win2022 STIG")}
+
+    def test_host_only_in_baseline_coverage_is_all_not_rescanned(self):
+        base = [
+            _finding("V-1", "HOST-A"),
+            _finding("V-2", "HOST-B"),
+            _finding("V-3", "HOST-B"),
+        ]
+        curr = [_finding("V-1", "HOST-A")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert sorted(f.vuln_id for f in buckets["Not re-scanned"]) == ["V-2", "V-3"]
+        assert result.only_baseline_hosts == {"HOST-B"}
+        assert result.not_rescanned_pairs == {("HOST-B", "Win2022 STIG")}
+
+    def test_scap_and_manual_editions_share_a_pair(self):
+        # The same STIG spelled as its SCAP benchmark in one run and its
+        # Manual XCCDF in the other must be ONE (host, STIG) pair, or every
+        # benchmark-edition change looks like a not-re-scanned + newly-scanned
+        # swap.
+        scap = "Microsoft Windows 11 STIG SCAP Benchmark"
+        manual = "Microsoft Windows 11 Security Technical Implementation Guide"
+        base = [
+            _finding("V-1", "HOST-A", stig_title=scap),
+            _finding("V-2", "HOST-A", stig_title=scap),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title=manual)]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert len(buckets["Persisting"]) == 1
+        assert [f.vuln_id for f in buckets["Resolved"]] == ["V-2"]
+        assert buckets["Not re-scanned"] == []
+        assert buckets["Newly scanned"] == []
+        assert result.not_rescanned_pairs == set()
+        assert result.newly_scanned_pairs == set()
+
+    def test_nessus_audit_revisions_share_a_pair(self):
+        v8 = "DISA_STIG_MS_Windows_11_v2r8.audit"
+        v9 = "DISA_STIG_MS_Windows_11_v2r9.audit"
+        base = [
+            _finding("V-1", "HOST-A", stig_title=v8),
+            _finding("V-2", "HOST-A", stig_title=v8),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title=v9)]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert len(buckets["Persisting"]) == 1
+        assert [f.vuln_id for f in buckets["Resolved"]] == ["V-2"]
+        assert buckets["Not re-scanned"] == []
+        assert buckets["Newly scanned"] == []
+        assert result.not_rescanned_pairs == set()
+        assert result.newly_scanned_pairs == set()
+
+    def test_pass_two_never_matches_blank_rule_ids(self):
+        # V-2 (baseline) and V-3 (current) both carry a blank rule_id. A
+        # rule-keyed pass that treats "" as a key pairs them up as one
+        # Persisting finding — hiding a real remediation and a real
+        # regression at once.
+        base = [_finding("V-1", rule_id="SV-1_rule"), _finding("V-2", rule_id="")]
+        curr = [_finding("V-1", rule_id="SV-1_rule"), _finding("V-3", rule_id="")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
+        assert [f.vuln_id for f in buckets["Resolved"]] == ["V-2"]
+        assert [f.vuln_id for f in buckets["New"]] == ["V-3"]
+
+    def test_findings_with_no_identity_are_never_persisting(self):
+        # Blank vuln_id AND blank rule_id on both sides: nothing says these
+        # are the same finding, so they must not be paired.
+        base = [_finding("V-1"), _finding("", rule_id="")]
+        curr = [_finding("V-1"), _finding("", rule_id="")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
+        assert len(buckets["Resolved"]) == 1 and buckets["Resolved"][0].rule_id == ""
+        assert len(buckets["New"]) == 1 and buckets["New"][0].rule_id == ""
+
+    def test_pass_two_matches_on_rule_stem_across_revisions(self):
+        # No vuln_id on either side (no --benchmarks); rule IDs differ only
+        # by the XCCDF namespace prefix and the rNNN revision -> Persisting.
+        base = [_finding("", rule_id="xccdf_mil.disa.stig_rule_SV-1r1_rule")]
+        curr = [_finding("", rule_id="SV-1r2_rule")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert len(buckets["Persisting"]) == 1
+        assert buckets["New"] == [] and buckets["Resolved"] == []
+
+    def test_rows_sort_by_normalised_host_key(self):
+        # Raw-string sort puts "Zeta" before "apple" (uppercase first).
+        base = [_finding("V-1", "Zeta"), _finding("V-1", "apple")]
+        curr = [_finding("V-1", "Zeta"), _finding("V-1", "apple")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert [f.server for f in result.findings] == ["apple", "Zeta"]
+
+    def test_no_overlap_warning_is_on_the_result(self):
+        base = [_finding("V-1", "A")]
+        curr = [_finding("V-1", "B")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert any("no hosts appear in both" in w.lower() for w in result.warnings), (
+            result.warnings
+        )
+
+    def test_not_rescanned_pairs_warning_names_the_pair(self):
+        edge = "Microsoft Edge STIG SCAP Benchmark"
+        base = [_finding("V-1", "HOST-A"), _finding("V-7", "HOST-A", stig_title=edge)]
+        curr = [_finding("V-1", "HOST-A")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert any(
+            "not re-scanned" in w.lower() and "HOST-A" in w and edge in w
+            for w in result.warnings
+        ), result.warnings
+
+    def test_newly_scanned_pairs_warning_names_the_pair(self):
+        edge = "Microsoft Edge STIG SCAP Benchmark"
+        base = [_finding("V-1", "HOST-A")]
+        curr = [_finding("V-1", "HOST-A"), _finding("V-7", "HOST-A", stig_title=edge)]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert any(
+            "newly scanned" in w.lower() and "HOST-A" in w and edge in w
+            for w in result.warnings
+        ), result.warnings
 
 
 class TestPersistingDetail:
     def test_status_flip_retained(self):
         base = [_finding("V-1", status="Not Reviewed")]
         curr = [_finding("V-1", status="Open")]
-        f = compute_delta(base, curr).findings[0]
+        f = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        ).findings[0]
         assert f.delta_status == "Persisting"
         assert f.baseline_status == "Not Reviewed"
         assert f.current_status == "Open"
@@ -105,28 +373,39 @@ class TestPersistingDetail:
         # Same vuln_id, different rule_id revision -> Persisting, not New+Resolved
         base = [_finding("V-1", rule_id="SV-1r1_rule")]
         curr = [_finding("V-1", rule_id="SV-1r2_rule")]
-        buckets = _by_status(compute_delta(base, curr))
+        buckets = _by_status(
+            compute_delta(base, curr, baseline_coverage=cov(base), current_coverage=cov(curr))
+        )
         assert len(buckets["Persisting"]) == 1
         assert buckets["New"] == [] and buckets["Resolved"] == []
 
 
 class TestEmptySets:
-    def test_empty_baseline_all_new(self):
-        # No baseline hosts -> every current host is a new host -> all New
+    def test_empty_baseline_coverage_all_newly_scanned(self):
+        # Nothing was scanned in the baseline -> every current host is a
+        # newly scanned host -> all Newly scanned, nothing New.
         curr = [_finding("V-1"), _finding("V-2")]
-        buckets = _by_status(compute_delta([], curr))
-        assert len(buckets["New"]) == 2
+        buckets = _by_status(
+            compute_delta([], curr, baseline_coverage=set(), current_coverage=cov(curr))
+        )
+        assert len(buckets["Newly scanned"]) == 2
+        assert buckets["New"] == []
         assert buckets["Resolved"] == []
 
-    def test_empty_current_all_not_rescanned(self):
-        # No current hosts -> baseline hosts all unscanned -> nothing Resolved
+    def test_empty_current_coverage_all_not_rescanned(self):
+        # Nothing was scanned in the current set -> nothing can be Resolved;
+        # the baseline findings stay on the report as Not re-scanned.
         base = [_finding("V-1"), _finding("V-2")]
-        result = compute_delta(base, [])
-        assert result.findings == []
+        result = compute_delta(
+            base, [], baseline_coverage=cov(base), current_coverage=set()
+        )
+        buckets = _by_status(result)
+        assert len(buckets["Not re-scanned"]) == 2
+        assert buckets["Resolved"] == []
         assert result.only_baseline_hosts == {"SERVER01"}
 
     def test_both_empty(self):
-        result = compute_delta([], [])
+        result = compute_delta([], [], baseline_coverage=set(), current_coverage=set())
         assert result.findings == []
 
 
@@ -147,7 +426,9 @@ class TestBlankVulnIdIdentity:
             _finding("", rule_id="SV-2_rule", status="Open"),  # persists
             # SV-3_rule dropped -> resolved
         ]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         assert len(result.findings) == 3
         buckets = _by_status(result)
         assert len(buckets["Persisting"]) == 2
@@ -161,7 +442,9 @@ class TestBlankVulnIdIdentity:
         base = [_finding("V-1")]
         curr = [_finding("V-1"), _finding("V-1")]
         with caplog.at_level(logging.WARNING):
-            result = compute_delta(base, curr)
+            result = compute_delta(
+                base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+            )
         assert len(result.findings) == 1
         assert result.findings[0].delta_status == "Persisting"
         assert any("duplicate" in rec.message.lower() for rec in caplog.records)
@@ -173,24 +456,33 @@ class TestBlankVulnIdIdentity:
 
 class TestHostMatching:
     def test_disjoint_hosts_hostname_mismatch(self):
+        # No host overlap: A was not re-scanned, B is newly scanned. Nothing
+        # is New or Resolved, because nothing was compared.
         base = [_finding("V-1", "A")]
         curr = [_finding("V-1", "B")]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         assert result.common_hosts == set()
         buckets = _by_status(result)
         assert buckets["Resolved"] == []
-        assert len(buckets["New"]) == 1
-        assert buckets["New"][0].server == "B"
+        assert buckets["New"] == []
+        assert [f.server for f in buckets["Not re-scanned"]] == ["A"]
+        assert [f.server for f in buckets["Newly scanned"]] == ["B"]
 
     def test_case_insensitive_host_match(self):
         base = [_finding("V-1", "SERVER01")]
         curr = [_finding("V-1", "server01")]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         assert len(result.common_hosts) == 1
         buckets = _by_status(result)
         assert len(buckets["Persisting"]) == 1
         assert buckets["New"] == []
         assert buckets["Resolved"] == []
+        assert buckets["Not re-scanned"] == []
+        assert buckets["Newly scanned"] == []
 
 
 class TestResolvedRowData:
@@ -209,7 +501,12 @@ class TestResolvedRowData:
             )
         ]
         curr = [_finding("V-1", "SERVER01")]  # keeps SERVER01 in common hosts
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr,
+            baseline_coverage=cov(base),
+            # The baseline STIG was re-scanned (pair present) but is clean now.
+            current_coverage=cov(curr) | {("SERVER01", "Baseline STIG Title")},
+        )
         resolved = [f for f in result.findings if f.delta_status == "Resolved"]
         assert len(resolved) == 1
         f = resolved[0]
@@ -250,7 +547,9 @@ class TestAsymmetricBenchmarkCoverage:
             _finding(f"V-25423{i}", server="HOST1", rule_id=rid, status="Open")
             for i, rid in enumerate(rule_ids)
         ]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         buckets = _by_status(result)
         assert buckets["Resolved"] == []
         assert buckets["New"] == []
@@ -276,7 +575,9 @@ class TestAsymmetricBenchmarkCoverage:
             # SV-2_rule genuinely fixed -- absent from current
             _finding("V-3", server="HOST1", rule_id="SV-3_rule", status="Open"),
         ]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         buckets = _by_status(result)
         assert len(buckets["Persisting"]) == 1
         assert buckets["Persisting"][0].rule_id == "SV-1_rule"
@@ -297,18 +598,26 @@ class TestDeterministicOrdering:
     def test_stable_across_repeated_calls(self):
         base = [_finding("", rule_id=f"SV-{i}_rule") for i in range(6)]
         curr = [_finding("", rule_id=f"SV-{i}_rule") for i in range(6)]
-        order1 = [f.rule_id for f in compute_delta(base, curr).findings]
-        order2 = [f.rule_id for f in compute_delta(base, curr).findings]
-        order3 = [f.rule_id for f in compute_delta(base, curr).findings]
-        assert order1 == order2 == order3
+        orders = [
+            [
+                f.rule_id
+                for f in compute_delta(
+                    base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+                ).findings
+            ]
+            for _ in range(3)
+        ]
+        assert orders[0] == orders[1] == orders[2]
 
     def test_explicit_order_for_blank_vuln_id_tie(self):
         # All on the same server, all blank vuln_id, all Persisting -> the
         # sort key ties down to rule_id, which must break the tie
-        # deterministically (server, vuln_id, rule_id, delta_status).
+        # deterministically (host key, vuln_id, rule_id, delta_status).
         base = [_finding("", rule_id=f"SV-{i}_rule") for i in (3, 1, 4, 0, 5, 2)]
         curr = [_finding("", rule_id=f"SV-{i}_rule") for i in (3, 1, 4, 0, 5, 2)]
-        result = compute_delta(base, curr)
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         assert [f.rule_id for f in result.findings] == [
             "SV-0_rule",
             "SV-1_rule",
@@ -321,5 +630,9 @@ class TestDeterministicOrdering:
 
 class TestWarningsField:
     def test_defaults_to_empty_list(self):
-        result = compute_delta([_finding("V-1")], [_finding("V-1")])
+        base = [_finding("V-1")]
+        curr = [_finding("V-1")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
         assert result.warnings == []
