@@ -159,3 +159,26 @@ in the template. Deferred to a separate commit after CLI ships.
 - `excel_exporter.export_delta` — presentation only; consumes `DeltaResult`.
 - `cli.py` — orchestration; composes existing `parse_stage`/`export_stage`
   with the new delta path.
+
+---
+
+## Revision 2 — 2026-09-28: coverage is per host and STIG, taken from the scans
+
+**Why.** Live run on a real SCC session (one host, seven STIGs, 322 Open findings): a current set that omitted two of the seven STIG scans, with nothing fixed, produced **90 Resolved** and exit 0 with no warning. Two independent reviews found the same root cause: host coverage is derived from the *actionable finding lists*, so a host or STIG with no findings left is invisible, and a STIG that was not re-scanned looks identical to one that was fully remediated. The same defect makes a fully remediated host disappear from the report as "not re-scanned", contradicting §Error handling ("all remediated → all Resolved").
+
+**Decisions (supersede §2 "Matching logic" and the host-level coverage bullets).**
+
+| # | Decision |
+|---|---|
+| R2-1 | `parse_stage` returns `coverage: set[(server, stig_title)]` built from every parsed row **before** the actionable filter, plus one pair per XCCDF scan file from its hostname and matched benchmark title. A scan with zero findings still contributes its pairs. |
+| R2-2 | `compute_delta(baseline, current, *, baseline_coverage, current_coverage)`; coverage is required, never derived from findings. Keys are `(_host_key(server), _stig_key(stig_title))`. `_stig_key` casefolds and drops product-neutral tokens (`stig`, `scap`, `benchmark`, `security technical implementation guide`, `manual`, `disa`, version tokens like `v2r8`, `.audit`) so the SCAP and Manual editions of one STIG share a key. |
+| R2-3 | Host sets come from coverage. A host only in current coverage: every finding is **Newly scanned**. A host only in baseline coverage: every finding is **Not re-scanned**. Neither is ever counted as New or Resolved. |
+| R2-4 | On common hosts the two-pass match stays host-scoped (pass 1 `(host, vuln_id)`, pass 2 `(host, rule stem)` with the XCCDF prefix and `rNNNNNN` revision stripped, blank rule IDs never matched). Matched pairs are **Persisting**. A leftover baseline finding is **Resolved** only if its `(host, stig)` pair is in current coverage, otherwise **Not re-scanned**. A leftover current finding is **New** only if its pair is in baseline coverage, otherwise **Newly scanned**. |
+| R2-5 | `DELTA_STATUSES = ("New", "Resolved", "Persisting", "Not re-scanned", "Newly scanned")`. The Findings sheet keeps the 11-column layout; the Summary counts every status; the Coverage block lists hosts compared, and each `(host, STIG)` pair not re-scanned and newly scanned. |
+| R2-6 | Every coverage warning (no host overlap, hosts or STIGs not re-scanned, asymmetric Vuln-ID coverage, duplicates) is appended to `DeltaResult.warnings`, so it reaches the workbook, not only the CLI log. |
+| R2-7 | `allow_empty` relaxes only the zero-*actionable* case. Zero rule results still raises `PipelineError`. |
+| R2-8 | Rows sort by normalised host key. |
+
+**Recorded as built (undocumented until now):** two-pass identity match with host-name normalisation; Baseline Status / Current Status split; `export()` shares the findings-sheet writer with `export_delta()` and its output is unchanged.
+
+**Acceptance on the real session:** same set both sides → 322 Persisting; current adds two STIG scans → 90 Newly scanned, 0 New; current omits two STIG scans → 90 Not re-scanned, 0 Resolved; current with every result set to pass → 322 Resolved.
