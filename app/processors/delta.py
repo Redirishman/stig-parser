@@ -464,8 +464,12 @@ def compute_delta(
     # every such STIG on a host shares one coverage pair and a STIG not
     # re-scanned there cannot be told apart from one fully remediated. The
     # findings fail closed (above); the operator is told why and how to fix it.
+    # Taken from the raw coverage inputs, not the indexed first-seen pairs:
+    # a titled spelling can share a key with a blank one (every token
+    # product-neutral) and would otherwise hide it depending on set order.
     blank_title_hosts = sorted(
-        {server for server, title in (*base_pairs.values(), *curr_pairs.values())
+        {raw_host[_host_key(server)]
+         for server, title in (*baseline_coverage, *current_coverage)
          if not title.strip()},
         key=_host_key,
     )

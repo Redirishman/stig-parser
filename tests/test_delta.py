@@ -676,6 +676,30 @@ class TestBlankStigTitleCoverage:
             for w in result.warnings
         ), result.warnings
 
+    def test_blank_title_warning_does_not_depend_on_coverage_order(self):
+        # "DISA STIG" normalises to the same key as "" (every token is
+        # product-neutral), so both pairs land on one key and only the
+        # first-seen spelling used to be inspected: the warning came and
+        # went with set iteration order. It must be computed from the raw
+        # coverage inputs, and the tags must not depend on order either.
+        base = [
+            _finding("V-1", "HOST-X", stig_title="DISA STIG"),
+            _finding("V-2", "HOST-X", stig_title=""),
+        ]
+        curr = [_finding("V-1", "HOST-X", stig_title="DISA STIG")]
+        forward = [("HOST-X", "DISA STIG"), ("HOST-X", "")]
+        results = [
+            compute_delta(base, curr, baseline_coverage=order, current_coverage=order)
+            for order in (forward, list(reversed(forward)))
+        ]
+        for r in results:
+            assert any(
+                "no stig title" in w.lower() and "HOST-X" in w for w in r.warnings
+            ), r.warnings
+        tags = [sorted((f.vuln_id, f.delta_status) for f in r.findings) for r in results]
+        assert tags[0] == tags[1]
+        assert ("V-2", "Not re-scanned") in tags[0]
+
     def test_titled_pairs_do_not_warn(self):
         base = [_finding("V-1", "HOST-A")]
         curr = [_finding("V-1", "HOST-A")]
