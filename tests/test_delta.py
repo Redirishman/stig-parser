@@ -25,9 +25,14 @@ def _finding(
     server: str = "SERVER01",
     status: str = "Open",
     severity: str = "CAT II",
-    rule_id: str = "SV-1r1_rule",
+    rule_id: str | None = None,
     stig_title: str = "Win2022 STIG",
 ) -> Finding:
+    if rule_id is None:
+        # Distinct Vuln IDs get distinct Rule IDs, as in real benchmark data
+        # (a Rule ID belongs to exactly one Vuln ID). "V-1" -> "SV-1r1_rule"
+        # keeps the historical default for the single-finding cases.
+        rule_id = f"SV-{vuln_id.removeprefix('V-') or '1'}r1_rule"
     return Finding(
         stig_title=stig_title,
         vuln_id=vuln_id,

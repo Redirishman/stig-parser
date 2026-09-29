@@ -54,9 +54,11 @@ _SEVERITY_FILL = {"CAT I": _FILL_CAT_I, "CAT II": _FILL_CAT_II, "CAT III": _FILL
 # renamed or added there raises KeyError at import time rather than silently
 # rendering with no fill.
 _DELTA_STATUS_COLOR = {
-    "New":        "FFC7CE",  # red-ish: regression
-    "Resolved":   "C6EFCE",  # green: remediated
-    "Persisting": "FFEB9C",  # amber: still open
+    "New":            "FFC7CE",  # red-ish: regression
+    "Resolved":       "C6EFCE",  # green: remediated
+    "Persisting":     "FFEB9C",  # amber: still open
+    "Not re-scanned": "D9D9D9",  # grey: no current scan to compare against
+    "Newly scanned":  "DDEBF7",  # light blue: no baseline scan to compare against
 }
 _DELTA_FILL = {
     status: PatternFill("solid", fgColor=_DELTA_STATUS_COLOR[status])
