@@ -499,15 +499,22 @@ def compute_delta(
     # every such STIG on a host shares one coverage pair and a STIG not
     # re-scanned there cannot be told apart from one fully remediated. The
     # findings fail closed (above); the operator is told why and how to fix it.
-    # Taken from the raw coverage inputs, not the indexed first-seen pairs:
-    # a titled spelling can share a key with a blank one (every token
-    # product-neutral) and would otherwise hide it depending on set order.
-    blank_title_hosts = sorted(
-        {raw_host[_host_key(server)]
-         for server, title in (*baseline_coverage, *current_coverage)
-         if not title.strip()},
-        key=_host_key,
-    )
+    # Detected on the STIG key (so a parser placeholder counts) over the raw
+    # coverage inputs AND both finding lists: the indexed first-seen pairs
+    # hide a blank spelling that shares a key with another, and a finding
+    # whose title keys to blank is tagged for that reason even when the
+    # coverage handed in names only titled pairs on its host.
+    blank_hosts: dict[str, str] = {}
+    for server, title in (
+        *baseline_coverage,
+        *current_coverage,
+        *((f.server, f.stig_title) for f in baseline),
+        *((f.server, f.stig_title) for f in current),
+    ):
+        if not _stig_key(title):
+            hk = _host_key(server)
+            blank_hosts.setdefault(hk, raw_host.get(hk, server))
+    blank_title_hosts = [blank_hosts[hk] for hk in sorted(blank_hosts)]
     if blank_title_hosts:
         n = len(blank_title_hosts)
         msg = (

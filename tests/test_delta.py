@@ -706,6 +706,52 @@ class TestBlankStigTitleCoverage:
         assert tags[0] == tags[1]
         assert ("V-2", "Not re-scanned") in tags[0]
 
+    def test_blank_titled_baseline_finding_warns_under_titled_coverage(self):
+        # Coverage names only titled pairs on HOST-A, but one baseline
+        # finding there has no STIG title. It is tagged Not re-scanned for
+        # the blank-key reason, so the operator must be told why: the
+        # warning has to look at the findings' titles, not only at the
+        # coverage pairs.
+        base = [_finding("V-1", "HOST-A"), _finding("V-2", "HOST-A", stig_title="")]
+        curr = [_finding("V-1", "HOST-A")]
+        titled = {("HOST-A", "Win2022 STIG")}
+        result = compute_delta(
+            base, curr, baseline_coverage=titled, current_coverage=titled
+        )
+        assert [f.vuln_id for f in _by_status(result)["Not re-scanned"]] == ["V-2"]
+        assert any(
+            "no stig title" in w.lower() and "HOST-A" in w for w in result.warnings
+        ), result.warnings
+
+    def test_blank_titled_current_finding_warns_under_titled_coverage(self):
+        base = [_finding("V-1", "HOST-A")]
+        curr = [_finding("V-1", "HOST-A"), _finding("V-3", "HOST-A", stig_title="")]
+        titled = {("HOST-A", "Win2022 STIG")}
+        result = compute_delta(
+            base, curr, baseline_coverage=titled, current_coverage=titled
+        )
+        assert [f.vuln_id for f in _by_status(result)["Newly scanned"]] == ["V-3"]
+        assert any(
+            "no stig title" in w.lower() and "HOST-A" in w for w in result.warnings
+        ), result.warnings
+
+    def test_placeholder_titled_pair_warns(self):
+        # "Unknown STIG" keys to blank (parser placeholder) and its findings
+        # fail closed; the warning must fire for it as for an empty title -
+        # detection goes through _stig_key, not a bare strip() check.
+        base = [
+            _finding("V-1", "HOST-A", stig_title="Unknown STIG"),
+            _finding("V-2", "HOST-A", stig_title="Unknown STIG"),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title="Unknown STIG")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert [f.vuln_id for f in _by_status(result)["Not re-scanned"]] == ["V-2"]
+        assert any(
+            "no stig title" in w.lower() and "HOST-A" in w for w in result.warnings
+        ), result.warnings
+
     def test_titled_pairs_do_not_warn(self):
         base = [_finding("V-1", "HOST-A")]
         curr = [_finding("V-1", "HOST-A")]
