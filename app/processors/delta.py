@@ -123,7 +123,8 @@ def _host_key(server: str) -> str:
 # used as a coverage key, so the SCAP and Manual editions of one STIG — and
 # successive revisions of one Nessus .audit — share a key.
 _STIG_PHRASES = ("security technical implementation guide",)
-_STIG_TOKENS = frozenset({"stig", "scap", "benchmark", "manual", "disa", "audit"})
+_STIG_TOKENS = frozenset({"stig", "scap", "benchmark", "manual", "disa"})
+_AUDIT_SUFFIX = ".audit"   # Nessus .audit filename; "audit" as a word is kept
 _VERSION_TOKEN = re.compile(r"^v\d+r\d+$")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -135,15 +136,24 @@ def _stig_key(stig_title: str) -> str:
     ``"Microsoft Windows 11 Security Technical Implementation Guide"`` both
     reduce to ``"microsoft windows 11"``; ``"DISA_STIG_MS_Windows_11_v2r8.audit"``
     and its ``v2r9`` successor both reduce to ``"ms windows 11"``.
+
+    Whitespace is collapsed before the phrase match; only whole neutral
+    tokens are dropped (``"Postgres STIGs"``, ``"Oracle Audit Vault"`` keep
+    theirs). A non-blank title that normalises to nothing (``"STIG"``) keeps
+    its collapsed, casefolded form: the blank key is reserved for a scan
+    that matched no benchmark, which fails closed (R2-9).
     """
-    text = stig_title.casefold()
+    text = " ".join(stig_title.split()).casefold()
+    if not text:
+        return ""
+    normalised = text.removesuffix(_AUDIT_SUFFIX)
     for phrase in _STIG_PHRASES:
-        text = text.replace(phrase, " ")
+        normalised = normalised.replace(phrase, " ")
     tokens = [
-        t for t in _NON_ALNUM.split(text)
+        t for t in _NON_ALNUM.split(normalised)
         if t and t not in _STIG_TOKENS and not _VERSION_TOKEN.match(t)
     ]
-    return " ".join(tokens)
+    return " ".join(tokens) or text
 
 
 _XCCDF_RULE_PREFIX = re.compile(r"^xccdf_[^_]+_rule_")

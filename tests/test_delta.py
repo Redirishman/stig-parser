@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from app.parsers.base import Finding
 from app.processors.delta import (
     DELTA_STATUSES,
     DeltaFinding,
     DeltaResult,
+    _rule_stem,
+    _stig_key,
     compute_delta,
 )
 
@@ -778,3 +782,63 @@ class TestBlankStigTitleFailsClosed:
         assert buckets["Resolved"] == []
         assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
         assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
+
+
+class TestStigKey:
+    """_stig_key: edition-neutral key for a STIG title. Only whole
+    product-neutral tokens are dropped, ".audit" only as a filename suffix,
+    internal whitespace is collapsed before phrase removal, and a title made
+    only of neutral tokens keeps a non-blank key — a blank key means "no
+    benchmark matched" and fails closed (R2-9)."""
+
+    @pytest.mark.parametrize(
+        ("title", "key"),
+        [
+            ("Microsoft Windows 11 STIG SCAP Benchmark", "microsoft windows 11"),
+            ("Microsoft Windows 11 Security Technical Implementation Guide",
+             "microsoft windows 11"),
+            # double space inside the phrase
+            ("Microsoft Windows 11 Security  Technical Implementation Guide",
+             "microsoft windows 11"),
+            ("  Microsoft   Windows 11   STIG  ", "microsoft windows 11"),
+            # only the whole token "stig" is neutral
+            ("Postgres STIGs", "postgres stigs"),
+            ("Mystigma", "mystigma"),
+            # "audit" is a product word; only the .audit suffix is dropped
+            ("Oracle Audit Vault STIG", "oracle audit vault"),
+            ("DISA_STIG_MS_Windows_11_v2r8.audit", "ms windows 11"),
+            ("DISA_STIG_MS_Windows_11_v2r9.audit", "ms windows 11"),
+            # version tokens
+            ("Windows 11 V1R12", "windows 11"),
+            ("Windows 11 v2r8 STIG", "windows 11"),
+            # neutral-only titles never collapse to the blank key
+            ("STIG", "stig"),
+            ("DISA STIG", "disa stig"),
+            ("Security  Technical Implementation Guide",
+             "security technical implementation guide"),
+            # genuinely blank
+            ("", ""),
+            ("   ", ""),
+        ],
+    )
+    def test_stig_key(self, title, key):
+        assert _stig_key(title) == key
+
+
+class TestRuleStem:
+    @pytest.mark.parametrize(
+        ("rule_id", "stem"),
+        [
+            ("xccdf_mil.disa.stig_rule_SV-254239r945408_rule", "SV-254239"),
+            ("SV-254239r945411_rule", "SV-254239"),
+            ("xccdf_mil.disa.stig_rule_SV-1r2_rule", "SV-1"),
+            ("SV-1", "SV-1"),
+            ("  SV-1r2_rule  ", "SV-1"),
+            # nothing but prefix/revision: no identity at all
+            ("r1_rule", ""),
+            ("xccdf_mil.disa.stig_rule_", ""),
+            ("", ""),
+        ],
+    )
+    def test_rule_stem(self, rule_id, stem):
+        assert _rule_stem(rule_id) == stem
