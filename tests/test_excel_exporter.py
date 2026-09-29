@@ -495,6 +495,52 @@ def test_delta_summary_coverage_block_names_blank_stig_title(tmp_path):
     assert ws.cell(row=r + 1, column=3).value == "(no STIG title)"
 
 
+def test_delta_summary_coverage_count_matches_not_rescanned_rows(tmp_path):
+    """The Coverage count must agree with the Findings sheet: every (host,
+    STIG) pair that carries a Not re-scanned row is listed under "Host /
+    STIG pairs not re-scanned" and the count is the number of such pairs.
+    Driven through compute_delta with a blank pair present on BOTH sides —
+    the case where the tags and the coverage block used to disagree ("0"
+    beside non-zero Not re-scanned rows, and a footer claiming the pairs
+    are "listed above")."""
+    from app.processors.delta import compute_delta
+
+    def untitled(vuln_id: str) -> Finding:
+        n = vuln_id.removeprefix("V-")
+        return _finding(vuln_id=vuln_id, rule_id=f"SV-{n}r1_rule", stig_title="")
+
+    base = [untitled("V-1"), untitled("V-2")]
+    curr = [untitled("V-1")]
+    pair = ("SERVER01", "")
+    delta = compute_delta(
+        base, curr, baseline_coverage={pair}, current_coverage={pair}
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(delta, out)
+    wb = load_workbook(out)
+
+    fs = wb["Findings"]
+    header = [fs.cell(row=1, column=c).value for c in range(1, fs.max_column + 1)]
+    c_delta = header.index("Delta") + 1
+    c_host = header.index("Server") + 1
+    c_stig = header.index("STIG Title") + 1
+    tagged = {
+        (fs.cell(row=r, column=c_host).value, fs.cell(row=r, column=c_stig).value or "")
+        for r in range(2, fs.max_row + 1)
+        if fs.cell(row=r, column=c_delta).value == "Not re-scanned"
+    }
+    assert tagged == {pair}, "scenario must produce exactly one Not re-scanned pair"
+
+    ws = wb["Summary"]
+    r = _row_of(ws, "Host / STIG pairs not re-scanned")
+    assert ws.cell(row=r, column=2).value == len(tagged)
+    listed = {
+        (ws.cell(row=r + 1 + i, column=2).value, ws.cell(row=r + 1 + i, column=3).value)
+        for i in range(len(tagged))
+    }
+    assert listed == {(host, stig or "(no STIG title)") for host, stig in tagged}
+
+
 def test_delta_summary_lists_each_compared_host(tmp_path):
     """Hosts compared: the count stays in column B of the label row and
     every host is listed (sanitised) on its own row beneath it, so the

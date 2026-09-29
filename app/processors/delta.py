@@ -81,7 +81,10 @@ class DeltaResult:
     only_current_hosts: set[str] = field(default_factory=set)
     # (host, STIG) pairs scanned in the baseline but absent from the current
     # coverage, and vice versa. Findings on these pairs are tagged
-    # "Not re-scanned" / "Newly scanned" and are never Resolved / New.
+    # "Not re-scanned" / "Newly scanned" and are never Resolved / New. A
+    # blank-key pair (scan matched no benchmark) is in BOTH sets whenever
+    # it is in both coverages: it can never verify a re-scan, so its
+    # leftovers are tagged the same way and the Coverage block must list it.
     not_rescanned_pairs: set[Pair] = field(default_factory=set)
     newly_scanned_pairs: set[Pair] = field(default_factory=set)
     # User-visible warnings (duplicate findings, coverage gaps, unreliable
@@ -383,8 +386,17 @@ def compute_delta(
         common_hosts={raw_host[hk] for hk in common_keys},
         only_baseline_hosts={raw_host[hk] for hk in base_host_keys - curr_host_keys},
         only_current_hosts={raw_host[hk] for hk in curr_host_keys - base_host_keys},
-        not_rescanned_pairs={base_pairs[pk] for pk in base_pairs.keys() - curr_pairs.keys()},
-        newly_scanned_pairs={curr_pairs[pk] for pk in curr_pairs.keys() - base_pairs.keys()},
+        # A pair is a gap when the other side lacks it — or when its STIG
+        # key is blank, on either side: a scan that matched no benchmark can
+        # never verify a re-scan, so the leftovers below are tagged Not
+        # re-scanned / Newly scanned even with the pair on both sides, and
+        # the Coverage block has to list the pair to agree with those tags.
+        not_rescanned_pairs={
+            raw for pk, raw in base_pairs.items() if pk not in curr_pairs or not pk[1]
+        },
+        newly_scanned_pairs={
+            raw for pk, raw in curr_pairs.items() if pk not in base_pairs or not pk[1]
+        },
         warnings=warnings,
     )
 

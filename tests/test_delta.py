@@ -785,6 +785,45 @@ class TestBlankStigTitleFailsClosed:
         assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
         assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
 
+    def test_untitled_pair_on_both_sides_is_listed_as_a_coverage_gap(self):
+        # The Coverage block must agree with the tags. A leftover on the
+        # blank pair is tagged Not re-scanned / Newly scanned, so the pair
+        # itself must be in not_rescanned_pairs / newly_scanned_pairs even
+        # though BOTH sides scanned it — a plain set difference leaves it
+        # out, and the Summary then reads "pairs not re-scanned: 0" beside a
+        # non-zero Not re-scanned count while the footer claims the pairs
+        # are "listed above".
+        base = [
+            _finding("V-1", "HOST-A", stig_title=""),
+            _finding("V-2", "HOST-A", stig_title=""),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title="")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
+        assert result.not_rescanned_pairs == {("HOST-A", "")}
+        assert result.newly_scanned_pairs == {("HOST-A", "")}
+        assert any(
+            "1 baseline host/STIG pair(s) were not re-scanned" in w
+            and "HOST-A / (no STIG title)" in w
+            for w in result.warnings
+        ), result.warnings
+
+    def test_titled_pair_on_both_sides_is_not_a_coverage_gap(self):
+        # The fix above must not leak into titled pairs: a STIG scanned on
+        # both sides is compared, so it is neither not re-scanned nor newly
+        # scanned, and a dropped finding on it IS Resolved.
+        base = [_finding("V-1", "HOST-A"), _finding("V-2", "HOST-A")]
+        curr = [_finding("V-1", "HOST-A")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert [f.vuln_id for f in _by_status(result)["Resolved"]] == ["V-2"]
+        assert result.not_rescanned_pairs == set()
+        assert result.newly_scanned_pairs == set()
+
 
 class TestStigKey:
     """_stig_key: edition-neutral key for a STIG title. Only whole
