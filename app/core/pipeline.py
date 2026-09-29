@@ -18,7 +18,7 @@ from app.parsers.nessus_parser import NessusComplianceParser
 from app.parsers.xccdf_parser import XCCDFResultsParser
 from app.processors.delta import DeltaResult
 from app.processors.filter import filter_findings
-from app.processors.matcher import match_results_to_benchmarks
+from app.processors.matcher import match_results_to_benchmarks, scan_coverage
 from app.utils.zip_extract import expand_benchmark_paths
 
 
@@ -35,6 +35,10 @@ class ParseResult:
     findings: list[Finding]
     warnings: list[str]
     source_file_count: int
+    # Every (server, stig_title) pair the scan set covered, built BEFORE the
+    # actionable filter and including scans with nothing left open. The
+    # delta report uses it to tell "fully remediated" from "not re-scanned".
+    coverage: set[tuple[str, str]]
 
 
 def parse_stage(
@@ -56,7 +60,8 @@ def parse_stage(
     where every rule passed returns an empty ``ParseResult`` instead of
     raising. Delta runs need this — a fully remediated scan set is a
     legitimate (and desirable) input, not a failure. A results set where
-    nothing could be parsed at all still raises regardless.
+    nothing could be parsed at all, or that parsed but contains zero rule
+    results, still raises regardless.
     """
 
     def _check() -> None:
@@ -119,36 +124,42 @@ def parse_stage(
         raise PipelineError("No valid results files could be parsed.")
 
     _check()
+    # Coverage comes from every parsed row (self-contained formats emit all
+    # statuses) plus one pair per XCCDF scan file — captured BEFORE the
+    # actionable filter so a clean scan still records what it covered.
+    coverage = {(f.server, f.stig_title) for f in sc_findings}
+    coverage |= scan_coverage(scan_results, benchmarks)
+
     findings = match_results_to_benchmarks(scan_results, benchmarks)
     findings.extend(sc_findings)
     findings = filter_findings(findings)
 
+    total_files = len(scan_results) + sc_file_count
+    total_rules = sum(len(s.rule_results) for s in scan_results) + len(sc_findings)
+    if total_rules == 0:
+        # Well-formed files with no rule results at all are a wrong input
+        # (e.g. a benchmark handed in as results), never a clean scan —
+        # allow_empty does not apply.
+        raise PipelineError(
+            f"No rule results were found in any of the {total_files} results "
+            f"file(s). The files may not be scan results (XCCDF, CKLB, or "
+            f".nessus), or may use an unrecognised structure. Check the "
+            f"warnings for details."
+        )
     if not findings and not allow_empty:
-        total_rules = sum(len(s.rule_results) for s in scan_results)
-        total_rules += len(sc_findings)
-        if total_rules == 0:
-            msg = (
-                f"No rule results were found in any of the "
-                f"{len(scan_results) + sc_file_count} results file(s). The "
-                f"files may not be scan results (XCCDF, CKLB, or .nessus), "
-                f"or may use an unrecognised structure. Check the warnings "
-                f"for details."
-            )
-        else:
-            msg = (
-                f"Parsed {total_rules} rule result(s) across "
-                f"{len(scan_results) + sc_file_count} file(s), but none had "
-                f"an actionable status (Open / Not Reviewed / Error / "
-                f"Unknown). Either every rule passed, or the results were "
-                f"not matched to the supplied STIG benchmarks. Check the "
-                f"warnings."
-            )
-        raise PipelineError(msg)
+        raise PipelineError(
+            f"Parsed {total_rules} rule result(s) across {total_files} "
+            f"file(s), but none had an actionable status (Open / Not Reviewed "
+            f"/ Error / Unknown). Either every rule passed, or the results "
+            f"were not matched to the supplied STIG benchmarks. Check the "
+            f"warnings."
+        )
 
     return ParseResult(
         findings=findings,
         warnings=warnings,
-        source_file_count=len(scan_results) + sc_file_count,
+        source_file_count=total_files,
+        coverage=coverage,
     )
 
 

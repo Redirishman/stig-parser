@@ -174,3 +174,55 @@ def test_export_delta_stage_writes_file(tmp_path):
     out = tmp_path / "d.xlsx"
     export_delta_stage(delta, out)
     assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Coverage (spec Revision 2, R2-1) and zero-rule-results handling (R2-7)
+# ---------------------------------------------------------------------------
+
+def test_parse_stage_coverage_from_all_pass_scan(tmp_path):
+    # A scan with nothing actionable still says which (host, STIG) it
+    # covered -- the delta report needs that to tell "fully remediated"
+    # apart from "not re-scanned".
+    src = tmp_path / "all_pass.xml"
+    src.write_text(_ALL_PASS_XCCDF, encoding="utf-8")
+    result = parse_stage([src], [], tmp_path / "e", allow_empty=True)
+    assert result.findings == []
+    assert len(result.coverage) == 1
+    assert {server for server, _ in result.coverage} == {"HOST-A"}
+
+
+def test_parse_stage_coverage_is_superset_of_finding_pairs(tmp_path):
+    result = parse_stage([FIXTURES / "scc_results.xml"], [], tmp_path / "e")
+    assert result.findings
+    assert {(f.server, f.stig_title) for f in result.findings} <= result.coverage
+
+
+def test_parse_stage_cklb_coverage_survives_actionable_filter(tmp_path):
+    # Self-contained formats build coverage from every parsed row BEFORE the
+    # actionable filter, so a checklist with every rule Not A Finding still
+    # contributes its (host, STIG) pair.
+    src = FIXTURES / "evaluate_stig_checklist.cklb"
+    text = src.read_text(encoding="utf-8")
+    clean = tmp_path / "clean.cklb"
+    clean.write_text(
+        text.replace('"status": "open"', '"status": "not_a_finding"')
+            .replace('"status": "not_reviewed"', '"status": "not_a_finding"'),
+        encoding="utf-8",
+    )
+    full = parse_stage([src], [], tmp_path / "e1")
+    result = parse_stage([clean], [], tmp_path / "e2", allow_empty=True)
+    assert result.findings == []
+    assert result.coverage == {(f.server, f.stig_title) for f in full.findings}
+
+
+def test_parse_stage_zero_rule_results_raises_even_with_allow_empty(tmp_path):
+    # allow_empty relaxes ONLY the zero-actionable case. A well-formed XML
+    # file with no <rule-result> elements at all (here: a benchmark handed
+    # in as a results file) is a wrong input, not a clean scan, and must
+    # still fail loudly.
+    with pytest.raises(PipelineError) as exc:
+        parse_stage(
+            [FIXTURES / "sample_benchmark.xml"], [], tmp_path / "e", allow_empty=True
+        )
+    assert "no rule results" in str(exc.value).lower()
