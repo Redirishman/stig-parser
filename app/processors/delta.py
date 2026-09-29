@@ -128,6 +128,11 @@ def _host_key(server: str) -> str:
 _STIG_PHRASES = ("security technical implementation guide",)
 _STIG_TOKENS = frozenset({"stig", "scap", "benchmark", "manual", "disa"})
 _AUDIT_SUFFIX = ".audit"   # Nessus .audit filename; "audit" as a word is kept
+# Titles a parser fills in when the file names no STIG at all (see
+# cklb_parser.py and nessus_parser.py). They carry no benchmark identity, so
+# they key to blank and fail closed exactly like an empty title (R2-9).
+# Compared after whitespace collapse and casefold.
+_PLACEHOLDER_TITLES = frozenset({"unknown stig", "nessus compliance"})
 _VERSION_TOKEN = re.compile(r"^v\d+r\d+$")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -144,10 +149,12 @@ def _stig_key(stig_title: str) -> str:
     tokens are dropped (``"Postgres STIGs"``, ``"Oracle Audit Vault"`` keep
     theirs). A non-blank title that normalises to nothing (``"STIG"``) keeps
     its collapsed, casefolded form: the blank key is reserved for a scan
-    that matched no benchmark, which fails closed (R2-9).
+    that matched no benchmark, which fails closed (R2-9). A parser
+    placeholder (``"Unknown STIG"``, ``"Nessus Compliance"``) is that same
+    case and keys to blank too.
     """
     text = " ".join(stig_title.split()).casefold()
-    if not text:
+    if not text or text in _PLACEHOLDER_TITLES:
         return ""
     normalised = text.removesuffix(_AUDIT_SUFFIX)
     for phrase in _STIG_PHRASES:

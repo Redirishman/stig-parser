@@ -824,6 +824,27 @@ class TestBlankStigTitleFailsClosed:
         assert result.not_rescanned_pairs == set()
         assert result.newly_scanned_pairs == set()
 
+    @pytest.mark.parametrize("placeholder", ["Unknown STIG", "Nessus Compliance"])
+    def test_parser_placeholder_title_fails_closed_like_blank(self, placeholder):
+        # cklb_parser / nessus_parser fill in a placeholder title when the
+        # file names no STIG. That is the same "no benchmark matched"
+        # situation as a blank title and must fail closed the same way: a
+        # dropped finding is Not re-scanned, never Resolved, and the pair
+        # is a listed coverage gap.
+        base = [
+            _finding("V-1", "HOST-A", stig_title=placeholder),
+            _finding("V-2", "HOST-A", stig_title=placeholder),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title=placeholder)]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
+        assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
+        assert result.not_rescanned_pairs == {("HOST-A", placeholder)}
+
 
 class TestStigKey:
     """_stig_key: edition-neutral key for a STIG title. Only whole
@@ -860,6 +881,13 @@ class TestStigKey:
             # genuinely blank
             ("", ""),
             ("   ", ""),
+            # parser placeholders for "no STIG name in the file" are blank
+            # too: cklb_parser emits "Unknown STIG", nessus_parser "Nessus
+            # Compliance". Compared case- and whitespace-insensitively.
+            ("Unknown STIG", ""),
+            ("Nessus Compliance", ""),
+            ("unknown stig", ""),
+            ("  NESSUS  COMPLIANCE ", ""),
         ],
     )
     def test_stig_key(self, title, key):
