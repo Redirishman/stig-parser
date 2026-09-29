@@ -683,17 +683,18 @@ class TestBlankStigTitleCoverage:
         ), result.warnings
 
     def test_blank_title_warning_does_not_depend_on_coverage_order(self):
-        # "DISA STIG" normalises to the same key as "" (every token is
-        # product-neutral), so both pairs land on one key and only the
-        # first-seen spelling used to be inspected: the warning came and
-        # went with set iteration order. It must be computed from the raw
-        # coverage inputs, and the tags must not depend on order either.
+        # "" and "   " both key to blank, so the two pairs land on one key
+        # and only one spelling survives indexing. Neither the warning nor
+        # the tags may depend on which spelling the caller listed first:
+        # the warning is computed from the raw inputs and the tags from
+        # the key. ("DISA STIG" no longer shares the blank key - a
+        # neutral-only title keeps its casefolded form, see TestStigKey.)
         base = [
-            _finding("V-1", "HOST-X", stig_title="DISA STIG"),
+            _finding("V-1", "HOST-X", stig_title="   "),
             _finding("V-2", "HOST-X", stig_title=""),
         ]
-        curr = [_finding("V-1", "HOST-X", stig_title="DISA STIG")]
-        forward = [("HOST-X", "DISA STIG"), ("HOST-X", "")]
+        curr = [_finding("V-1", "HOST-X", stig_title="   ")]
+        forward = [("HOST-X", "   "), ("HOST-X", "")]
         results = [
             compute_delta(base, curr, baseline_coverage=order, current_coverage=order)
             for order in (forward, list(reversed(forward)))
@@ -702,9 +703,10 @@ class TestBlankStigTitleCoverage:
             assert any(
                 "no stig title" in w.lower() and "HOST-X" in w for w in r.warnings
             ), r.warnings
+            assert r.not_rescanned_pairs == {("HOST-X", "")}, r.not_rescanned_pairs
         tags = [sorted((f.vuln_id, f.delta_status) for f in r.findings) for r in results]
         assert tags[0] == tags[1]
-        assert ("V-2", "Not re-scanned") in tags[0]
+        assert tags[0] == [("V-1", "Persisting"), ("V-2", "Not re-scanned")]
 
     def test_blank_titled_baseline_finding_warns_under_titled_coverage(self):
         # Coverage names only titled pairs on HOST-A, but one baseline
