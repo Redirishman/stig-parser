@@ -310,31 +310,23 @@ def _run_delta(args: argparse.Namespace) -> int:
         for w in (*base_res.warnings, *curr_res.warnings):
             log.warning(w)
 
-        delta = compute_delta(base_res.findings, curr_res.findings)
+        # Coverage (which host/STIG pairs each set actually scanned) comes
+        # from the scans, not the finding lists: a clean scan still counts
+        # as re-scanned, and a STIG left out of the current set is reported
+        # as not re-scanned rather than resolved.
+        delta = compute_delta(
+            base_res.findings,
+            curr_res.findings,
+            baseline_coverage=base_res.coverage,
+            current_coverage=curr_res.coverage,
+        )
 
-        # Surface delta-specific warnings (duplicate findings, asymmetric
-        # benchmark coverage) the same way parse warnings are surfaced.
+        # Every delta warning — duplicate findings, asymmetric benchmark
+        # coverage, hosts/STIGs not re-scanned or newly scanned, no host
+        # overlap — lives on delta.warnings so the workbook carries it too;
+        # here it is only echoed to the log.
         for w in delta.warnings:
             log.warning(w)
-
-        if not delta.common_hosts:
-            log.warning(
-                "No hosts appear in BOTH scan sets — check that hostnames "
-                "match, or that one set isn't fully remediated (a scan with "
-                "no actionable findings contributes no hosts). All baseline "
-                "hosts are 'not re-scanned' and all current hosts are 'new'."
-            )
-        elif delta.only_baseline_hosts:
-            # Not an error, but their findings are dropped entirely, so the
-            # Resolved count below covers fewer hosts than the operator may
-            # assume.
-            log.warning(
-                "%d baseline host(s) were not re-scanned in the current set — "
-                "their findings are excluded, since resolution cannot be "
-                "inferred for a host nobody re-scanned: %s",
-                len(delta.only_baseline_hosts),
-                ", ".join(sorted(delta.only_baseline_hosts)),
-            )
 
         counts = Counter(f.delta_status for f in delta.findings)
         log.info(

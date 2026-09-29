@@ -373,15 +373,13 @@ class TestDeltaEndToEnd:
             for r in caplog.records
         ), "delta warnings were not surfaced by the CLI"
 
-    def test_fully_remediated_current_scan_still_reports(self, tmp_path, caplog):
-        """A current scan with zero actionable findings must not abort.
+    def test_fully_remediated_current_scan_is_all_resolved(self, tmp_path, caplog):
+        """A current scan with zero actionable findings must not abort, and
+        every baseline finding on it must be Resolved.
 
-        100% remediation is the operator's best possible outcome; parse_stage
-        would otherwise raise "none had an actionable status" and kill the run.
-        Note the workbook has no Resolved rows: host coverage is derived from
-        findings, so a host with no findings left is invisible to
-        compute_delta and lands in only_baseline_hosts instead. See
-        test_partially_remediated_scan_tags_resolved for the Resolved path.
+        100% remediation is the operator's best possible outcome. The clean
+        scan still records which host/STIG it covered (ParseResult.coverage),
+        so compute_delta can tell "fully remediated" from "not re-scanned".
         """
         baseline = FIXTURES / "scc_results.xml"
         clean = tmp_path / "clean.xml"
@@ -394,7 +392,7 @@ class TestDeltaEndToEnd:
             encoding="utf-8",
         )
         out = tmp_path / "delta.xlsx"
-        with caplog.at_level(logging.WARNING, logger="app.cli"):
+        with caplog.at_level(logging.INFO, logger="app.cli"):
             rc = main([
                 "delta",
                 "--baseline", str(baseline),
@@ -402,8 +400,14 @@ class TestDeltaEndToEnd:
                 "--output", str(out),
             ])
         assert rc == 0, "a fully remediated current scan must not fail the run"
-        assert out.exists()
-        assert load_workbook(out)["Findings"].max_row == 1  # header only
+        rows = _delta_rows(out)
+        assert len(rows) == 5
+        assert set(rows.values()) == {"Resolved"}
+        assert any(
+            "Delta: 0 new, 5 resolved, 0 persisting, 0 not re-scanned, "
+            "0 newly scanned across 1 common host(s)" in r.message
+            for r in caplog.records
+        ), [r.message for r in caplog.records]
 
     def test_fully_clean_baseline_still_reports(self, tmp_path):
         """A baseline with zero actionable findings is legitimate too.
@@ -485,7 +489,8 @@ class TestDeltaEndToEnd:
         # The console summary must match the workbook (headless/CI operators
         # only ever see this line).
         assert any(
-            "Delta: 0 new, 4 resolved, 1 persisting across 1 common host(s)" in r.message
+            "Delta: 0 new, 4 resolved, 1 persisting, 0 not re-scanned, "
+            "0 newly scanned across 1 common host(s)" in r.message
             for r in caplog.records
         ), [r.message for r in caplog.records]
 
@@ -587,6 +592,17 @@ class TestDeltaEndToEnd:
             "not re-scanned" in r.message and "WIN-SERVER-02" in r.message
             for r in caplog.records
         ), "unscanned baseline hosts must be named"
+        # ...and its findings stay on the report, tagged — never Resolved.
+        ws = load_workbook(out)["Findings"]
+        by_host: dict[str, set[str]] = {}
+        for r in range(2, ws.max_row + 1):
+            by_host.setdefault(ws.cell(row=r, column=8).value, set()).add(
+                ws.cell(row=r, column=1).value
+            )
+        assert by_host == {
+            "WIN-SERVER-01": {"Persisting"},
+            "WIN-SERVER-02": {"Not re-scanned"},
+        }
 
     def test_no_common_hosts_warns(self, tmp_path, caplog):
         """Disjoint hostnames make Resolved uninferable — the operator is told."""
@@ -610,7 +626,132 @@ class TestDeltaEndToEnd:
         )
         ws = load_workbook(out)["Findings"]
         tags = {ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)}
-        assert tags == {"New"}
+        assert tags == {"Not re-scanned", "Newly scanned"}
+
+
+def _second_stig(tmp_path: Path) -> tuple[Path, Path]:
+    """A second STIG scanned on the same host: the Windows fixture pair
+    (results + benchmark) re-identified as "Microsoft Edge" with its own
+    benchmark id and rule/vuln IDs, so nothing collides with the original."""
+    edits = {
+        "V-2542": "V-9942",  # also rewrites SV-2542... rule IDs
+        "MS_Windows_Server_2022_STIG": "MS_Edge_STIG",
+        "Microsoft Windows Server 2022 Security Technical Implementation Guide":
+            "Microsoft Edge Security Technical Implementation Guide",
+    }
+    out = []
+    for src in (FIXTURES / "scc_results.xml", FIXTURES / "sample_benchmark.xml"):
+        text = src.read_text(encoding="utf-8")
+        for old, new in edits.items():
+            text = text.replace(old, new)
+        dest = tmp_path / f"edge_{src.name}"
+        dest.write_text(text, encoding="utf-8")
+        out.append(dest)
+    return out[0], out[1]
+
+
+def _pair_rows(summary_ws, label: str) -> list[tuple[str, str]]:
+    """(host, STIG) rows listed under *label* in the Summary Coverage block."""
+    r = next(
+        i for i in range(1, summary_ws.max_row + 1)
+        if summary_ws.cell(row=i, column=1).value == label
+    )
+    n = summary_ws.cell(row=r, column=2).value
+    return [
+        (summary_ws.cell(row=r + 1 + i, column=2).value,
+         summary_ws.cell(row=r + 1 + i, column=3).value)
+        for i in range(n)
+    ]
+
+
+class TestDeltaStigCoverageEndToEnd:
+    """The live defect: one host, several STIGs, and a current set that
+    omits one STIG scan. Its findings must be Not re-scanned, never Resolved
+    — and the gap must be visible in the log AND on the workbook."""
+
+    def test_stig_not_rescanned_is_never_resolved(self, tmp_path, caplog):
+        win_results = FIXTURES / "scc_results.xml"
+        win_bench = FIXTURES / "sample_benchmark.xml"
+        edge_results, edge_bench = _second_stig(tmp_path)
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(win_results), str(edge_results),
+                "--current", str(win_results),
+                "--benchmarks", str(win_bench), str(edge_bench),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        rows = _delta_rows(out)
+        edge = {k: v for k, v in rows.items() if "SV-9942" in k}
+        win = {k: v for k, v in rows.items() if "SV-9942" not in k}
+        assert len(edge) == 5 and set(edge.values()) == {"Not re-scanned"}
+        assert len(win) == 5 and set(win.values()) == {"Persisting"}
+        assert "Resolved" not in rows.values()
+        assert any(
+            "not re-scanned" in r.message.lower()
+            and "WIN-SERVER-01" in r.message
+            and "Microsoft Edge" in r.message
+            for r in caplog.records
+        ), [r.message for r in caplog.records]
+        listed = _pair_rows(load_workbook(out)["Summary"], "Host / STIG pairs not re-scanned")
+        assert len(listed) == 1
+        assert listed[0][0] == "WIN-SERVER-01" and "Microsoft Edge" in listed[0][1]
+
+    def test_newly_scanned_stig_is_never_new(self, tmp_path, caplog):
+        win_results = FIXTURES / "scc_results.xml"
+        win_bench = FIXTURES / "sample_benchmark.xml"
+        edge_results, edge_bench = _second_stig(tmp_path)
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(win_results),
+                "--current", str(win_results), str(edge_results),
+                "--benchmarks", str(win_bench), str(edge_bench),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        rows = _delta_rows(out)
+        edge = {k: v for k, v in rows.items() if "SV-9942" in k}
+        win = {k: v for k, v in rows.items() if "SV-9942" not in k}
+        assert len(edge) == 5 and set(edge.values()) == {"Newly scanned"}
+        assert len(win) == 5 and set(win.values()) == {"Persisting"}
+        assert "New" not in rows.values()
+        assert any(
+            "newly scanned" in r.message.lower()
+            and "WIN-SERVER-01" in r.message
+            and "Microsoft Edge" in r.message
+            for r in caplog.records
+        ), [r.message for r in caplog.records]
+        listed = _pair_rows(load_workbook(out)["Summary"], "Host / STIG pairs newly scanned")
+        assert len(listed) == 1
+        assert listed[0][0] == "WIN-SERVER-01" and "Microsoft Edge" in listed[0][1]
+
+    def test_coverage_warnings_reach_the_workbook(self, tmp_path):
+        """The CLI log is gone by the time the workbook is read for
+        accreditation; the coverage warning must be on the Summary sheet."""
+        win_results = FIXTURES / "scc_results.xml"
+        win_bench = FIXTURES / "sample_benchmark.xml"
+        edge_results, edge_bench = _second_stig(tmp_path)
+        out = tmp_path / "delta.xlsx"
+        rc = main([
+            "delta",
+            "--baseline", str(win_results), str(edge_results),
+            "--current", str(win_results),
+            "--benchmarks", str(win_bench), str(edge_bench),
+            "--output", str(out),
+        ])
+        assert rc == 0
+        ws = load_workbook(out)["Summary"]
+        text = " ".join(
+            str(ws.cell(row=r, column=1).value)
+            for r in range(1, ws.max_row + 1)
+            if ws.cell(row=r, column=1).value is not None
+        )
+        assert "Warnings" in text
+        assert "not re-scanned" in text and "Microsoft Edge" in text
 
 
 class TestReportBackCompatEndToEnd:
