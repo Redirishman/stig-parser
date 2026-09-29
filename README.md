@@ -122,7 +122,8 @@ python -m app.cli --results ./scc-results/ --output findings.xlsx
 #### `delta` — compare two scan sets
 
 Diffs a baseline scan set against a current one to show what changed between
-runs — new findings, resolved findings, and findings that persist.
+runs — new, resolved and persisting findings — and which host/STIG pairs were
+not re-scanned, so a missing scan can never be mistaken for remediation.
 
 ```bash
 # Compare a baseline directory against a current one
@@ -147,27 +148,44 @@ python -m app.cli delta --baseline "baseline/*.xml" --current "current/*.xml"
 | `--verbose` | Enable detailed logging |
 
 The output workbook's **Findings** sheet carries a leading **Delta** column
-tagging every row `New` (absent from baseline, present in current),
-`Resolved` (present in baseline, absent from current), or `Persisting`
-(present in both), plus separate `Baseline Status` and `Current Status`
-columns. The **Summary** sheet breaks delta status down by severity and adds
-a coverage block.
+tagging every row with one of five statuses, plus separate `Baseline Status`
+and `Current Status` columns:
+
+| Delta | Meaning |
+|---|---|
+| `New` | Absent from the baseline, present in the current scan of the same host and STIG. |
+| `Resolved` | Present in the baseline, absent from the current scan of the **same host and STIG** — the pair was re-scanned and the finding is gone. |
+| `Persisting` | Present in both. `Baseline Status` / `Current Status` show a within-actionable flip (e.g. Not Reviewed → Open). |
+| `Not re-scanned` | Baseline finding whose host/STIG pair has no scan in the current set. Never counted as resolved. |
+| `Newly scanned` | Current finding whose host/STIG pair has no scan in the baseline set. Never counted as new. |
+
+The **Summary** sheet counts every status by severity and adds a **Coverage**
+block: hosts compared, then every host/STIG pair not re-scanned and every
+pair newly scanned, one row each. Every coverage warning is written to the
+Summary sheet as well as the terminal.
 
 Findings lists only ever contain actionable results — passing rules never
 appear — so `Resolved` is *inferred* from a finding's absence in the current
 scan, not proven from a passing re-check. To keep that inference honest, the
-comparison is scoped to hosts present in **both** scans: a host that only
-appears in the baseline is reported under "hosts not re-scanned" and its
-findings are never counted as resolved, so forgetting to re-scan a host can't
-look like remediation. A host that only appears in the current scan is a
-"new host," and every finding on it is tagged `New`.
+tool records which host/STIG pairs each scan set actually covered (taken from
+the scan files themselves, before the actionable filter), and **`Resolved`
+requires the same host and STIG in the current set**. Forgetting to re-scan a
+host, or leaving one STIG out of a re-scan, shows up as `Not re-scanned` and
+can't look like remediation; a fully remediated host still shows every
+baseline finding as `Resolved`. STIG titles are matched edition-neutrally, so
+the SCAP and Manual editions of one STIG (or successive `.audit` revisions)
+count as the same STIG.
 
 Findings are matched across runs by Vuln ID (V-XXXXXX) where available,
-falling back to Rule ID — Vuln ID is stable across DISA benchmark revisions
-where Rule ID is not. If the two runs have different benchmark coverage
-(e.g. `--benchmarks` supplied for only one of them), the tool warns that
-Resolved/New counts may be unreliable; the warning appears both in the
-terminal and in the workbook's Summary sheet.
+falling back to the Rule ID stem (namespace prefix and `rNNNNNN` revision
+stripped; a blank Rule ID is never matched) — Vuln ID is stable across DISA
+benchmark revisions where Rule ID is not. If the two runs have different
+benchmark coverage (e.g. `--benchmarks` supplied for only one of them), the
+tool warns that Resolved/New counts may be unreliable. A scan that could not
+be matched to a benchmark has no STIG title, so coverage on that host is
+tracked per host rather than per STIG; the tool warns and recommends
+`--benchmarks` for both sets. Every warning appears both in the terminal and
+in the workbook's Summary sheet.
 
 ---
 
