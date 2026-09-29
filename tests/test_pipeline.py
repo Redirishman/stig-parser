@@ -1,5 +1,6 @@
 # tests/test_pipeline.py
 """Tests for the shared parse→export pipeline."""
+import re
 from pathlib import Path
 
 import pytest
@@ -226,3 +227,30 @@ def test_parse_stage_zero_rule_results_raises_even_with_allow_empty(tmp_path):
             [FIXTURES / "sample_benchmark.xml"], [], tmp_path / "e", allow_empty=True
         )
     assert "no rule results" in str(exc.value).lower()
+
+
+def _strip_rule_results(src: Path, dest: Path) -> Path:
+    """Copy *src* with every <cdf:rule-result> block removed."""
+    text = src.read_text(encoding="utf-8")
+    stripped = re.sub(
+        r"<cdf:rule-result[ >].*?</cdf:rule-result>", "", text, flags=re.DOTALL
+    )
+    assert "<cdf:rule-result" not in stripped and "<cdf:target>" in stripped
+    dest.write_text(stripped, encoding="utf-8")
+    return dest
+
+
+def test_parse_stage_zero_rule_result_scan_is_warned_and_not_covered(tmp_path):
+    # A results file with no <rule-result> at all is not a scan. It must
+    # not put its (host, STIG) pair into coverage — the delta would then
+    # read every baseline finding on that pair as Resolved — and the
+    # operator must be told which file, by name.
+    good = tmp_path / "all_pass.xml"
+    good.write_text(_ALL_PASS_XCCDF, encoding="utf-8")
+    empty = _strip_rule_results(FIXTURES / "scc_results.xml", tmp_path / "empty.xml")
+    result = parse_stage([good, empty], [], tmp_path / "e", allow_empty=True)
+    assert {server for server, _ in result.coverage} == {"HOST-A"}
+    assert any(
+        w.startswith("empty.xml: 0 rule results") and "--benchmarks" in w
+        for w in result.warnings
+    ), result.warnings

@@ -229,19 +229,35 @@ class TestScanCoverage:
         assert scan_coverage([scan], [bm]) == {("SERVER01", bm.title)}
 
     def test_unmatched_benchmark_yields_blank_title(self):
-        scan = _make_scan("SERVER01", benchmark_id="xccdf_other_benchmark")
+        scan = _make_scan(
+            "SERVER01",
+            benchmark_id="xccdf_other_benchmark",
+            rule_results=[RuleResult(RULE_ID, "fail")],
+        )
         assert scan_coverage([scan], []) == {("SERVER01", "")}
 
     def test_one_pair_per_scan_file(self):
         rule = _make_rule(RULE_ID)
         bm = _make_benchmark(BENCHMARK_ID, [rule])
+        passed = [RuleResult(RULE_ID, "pass")]
         scans = [
-            _make_scan("SERVER01", benchmark_id=BENCHMARK_ID),
-            _make_scan("SERVER02", benchmark_id=BENCHMARK_ID),
-            _make_scan("SERVER01", benchmark_id="xccdf_other_benchmark"),
+            _make_scan("SERVER01", benchmark_id=BENCHMARK_ID, rule_results=passed),
+            _make_scan("SERVER02", benchmark_id=BENCHMARK_ID, rule_results=passed),
+            _make_scan("SERVER01", benchmark_id="xccdf_other_benchmark", rule_results=passed),
         ]
         assert scan_coverage(scans, [bm]) == {
             ("SERVER01", bm.title),
             ("SERVER02", bm.title),
             ("SERVER01", ""),
         }
+
+    def test_zero_rule_result_scan_yields_no_pair(self):
+        # A file with no <rule-result> at all (a benchmark handed in as
+        # results, or a scan that never ran) covers nothing. Counting it
+        # would let every baseline finding on that host/STIG read as
+        # Resolved in a delta — the one thing the report must never do.
+        rule = _make_rule(RULE_ID)
+        bm = _make_benchmark(BENCHMARK_ID, [rule])
+        empty = _make_scan("SERVER01", benchmark_id=BENCHMARK_ID, rule_results=[])
+        assert scan_coverage([empty], [bm]) == set()
+        assert scan_coverage([empty], []) == set()

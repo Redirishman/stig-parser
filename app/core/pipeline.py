@@ -129,6 +129,15 @@ def parse_stage(
     # actionable filter so a clean scan still records what it covered.
     coverage = {(f.server, f.stig_title) for f in sc_findings}
     coverage |= scan_coverage(scan_results, benchmarks)
+    # scan_coverage skips a file with no rule results (it is not a scan and
+    # must never count as a re-scan); say so per file, so a benchmark that
+    # was handed in as results is caught rather than silently ignored.
+    for sr in scan_results:
+        if not sr.rule_results:
+            warnings.append(
+                f"{sr.source_file}: 0 rule results — not counted as a scan; "
+                "if this file is a benchmark, pass it with --benchmarks"
+            )
 
     findings = match_results_to_benchmarks(scan_results, benchmarks)
     findings.extend(sc_findings)

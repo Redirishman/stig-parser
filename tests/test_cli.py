@@ -773,6 +773,68 @@ class TestDeltaStigCoverageEndToEnd:
         assert "not re-scanned" in text and "Microsoft Edge" in text
 
 
+def _strip_rule_results(src: Path, dest: Path) -> Path:
+    """Copy *src* with every <cdf:rule-result> block removed."""
+    text = src.read_text(encoding="utf-8")
+    stripped = re.sub(
+        r"<cdf:rule-result[ >].*?</cdf:rule-result>", "", text, flags=re.DOTALL
+    )
+    assert "<cdf:rule-result" not in stripped and "<cdf:target>" in stripped
+    dest.write_text(stripped, encoding="utf-8")
+    return dest
+
+
+def _warning_rows(summary_ws) -> list[str]:
+    """Every warning listed under the Summary sheet's Warnings heading."""
+    heading = next(
+        (i for i in range(1, summary_ws.max_row + 1)
+         if summary_ws.cell(row=i, column=1).value == "Warnings"),
+        None,
+    )
+    if heading is None:
+        return []
+    rows: list[str] = []
+    r = heading + 1
+    while summary_ws.cell(row=r, column=1).value not in (None, ""):
+        rows.append(str(summary_ws.cell(row=r, column=1).value))
+        r += 1
+    return rows
+
+
+class TestZeroRuleResultScanEndToEnd:
+    """A current-set file with no <rule-result> at all (a benchmark handed
+    in as results, or a scan that never ran) must not count as a re-scan:
+    the baseline findings on that host/STIG are Not re-scanned, never
+    Resolved, and the operator is told in the log AND on the workbook."""
+
+    def test_empty_scan_file_never_resolves_baseline_findings(self, tmp_path, caplog):
+        win_results = FIXTURES / "scc_results.xml"
+        win_bench = FIXTURES / "sample_benchmark.xml"
+        edge_results, edge_bench = _second_stig(tmp_path)
+        empty = _strip_rule_results(win_results, tmp_path / "win_no_results.xml")
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(win_results),
+                "--current", str(empty), str(edge_results),
+                "--benchmarks", str(win_bench), str(edge_bench),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        rows = _delta_rows(out)
+        win = {k: v for k, v in rows.items() if "SV-9942" not in k}
+        assert len(win) == 5 and set(win.values()) == {"Not re-scanned"}, rows
+        assert "Resolved" not in rows.values()
+        expected = "win_no_results.xml: 0 rule results"
+        assert any(
+            expected in r.message and "--benchmarks" in r.message
+            for r in caplog.records if r.name == "app.cli"
+        ), [r.message for r in caplog.records]
+        listed = _warning_rows(load_workbook(out)["Summary"])
+        assert any(expected in w and "--benchmarks" in w for w in listed), listed
+
+
 class TestReportBackCompatEndToEnd:
     def test_bare_results_produces_report(self, tmp_path):
         """The historical ``stig-parser --results ...`` form still runs."""
