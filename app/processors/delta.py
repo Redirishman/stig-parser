@@ -195,14 +195,16 @@ def _vuln_key(f: Finding) -> tuple[str, str] | None:
 
 
 def _rule_key(f: Finding) -> tuple[str, str] | None:
-    """Cross-run match key: (normalized host, rule stem). None if rule_id is blank.
+    """Cross-run match key: (normalized host, rule stem). None if the stem is blank.
 
-    A blank rule ID carries no identity: two findings that both lack one
-    must never be paired up as the same finding.
+    A blank stem carries no identity — whether the rule ID is empty or is
+    nothing but the XCCDF prefix and revision (``r1_rule``): two findings
+    that both lack one must never be paired up as the same finding.
     """
-    if not f.rule_id.strip():
+    stem = _rule_stem(f.rule_id)
+    if not stem:
         return None
-    return (_host_key(f.server), _rule_stem(f.rule_id))
+    return (_host_key(f.server), stem)
 
 
 def _build_index(

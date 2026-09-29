@@ -18,6 +18,7 @@ from app.processors.delta import (
     DELTA_STATUSES,
     DeltaFinding,
     DeltaResult,
+    _rule_key,
     _rule_stem,
     _stig_key,
     compute_delta,
@@ -842,3 +843,26 @@ class TestRuleStem:
     )
     def test_rule_stem(self, rule_id, stem):
         assert _rule_stem(rule_id) == stem
+
+
+class TestRuleKeyEmptyStem:
+    """A rule ID that is nothing but prefix/revision has no identity once
+    stemmed. It must not index at all, or two unrelated garbage IDs on the
+    same host would pair up as one Persisting finding."""
+
+    @pytest.mark.parametrize("rule_id", ["r1_rule", "xccdf_mil.disa.stig_rule_", "  "])
+    def test_rule_key_is_none_when_stem_is_empty(self, rule_id):
+        assert _rule_key(_finding("", rule_id=rule_id)) is None
+
+    def test_rule_key_present_for_a_real_stem(self):
+        assert _rule_key(_finding("", rule_id="SV-1r2_rule")) == ("server01", "SV-1")
+
+    def test_two_empty_stem_findings_are_never_persisting(self):
+        base = [_finding("", rule_id="r1_rule")]
+        curr = [_finding("", rule_id="xccdf_mil.disa.stig_rule_")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["Persisting"] == []
+        assert len(buckets["Resolved"]) == 1 and len(buckets["New"]) == 1
