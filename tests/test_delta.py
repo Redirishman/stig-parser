@@ -641,3 +641,29 @@ class TestWarningsField:
             base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
         )
         assert result.warnings == []
+
+
+class TestBlankStigTitleCoverage:
+    def test_blank_stig_title_pairs_warn_that_coverage_is_per_host(self):
+        # A scan that could not be matched to a benchmark has stig_title "",
+        # so every such STIG on a host shares ONE coverage pair — a STIG not
+        # re-scanned there can no longer be told apart from one fully
+        # remediated. That cannot be fixed without the benchmark, but it
+        # must not be silent: the operator is told to supply --benchmarks.
+        base = [_finding("V-1", "HOST-A", stig_title="")]
+        curr = [_finding("V-1", "HOST-A", stig_title="")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert any(
+            "no stig title" in w.lower() and "HOST-A" in w and "--benchmarks" in w
+            for w in result.warnings
+        ), result.warnings
+
+    def test_titled_pairs_do_not_warn(self):
+        base = [_finding("V-1", "HOST-A")]
+        curr = [_finding("V-1", "HOST-A")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert result.warnings == []

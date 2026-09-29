@@ -451,6 +451,26 @@ def compute_delta(
         )
         log.warning(msg)
         warnings.append(msg)
+    # A scan that could not be matched to a benchmark has no STIG title, so
+    # every such STIG on a host shares one coverage pair and a STIG not
+    # re-scanned there cannot be told apart from one fully remediated. That
+    # needs the benchmark to fix; until then it must not be silent.
+    blank_title_hosts = sorted(
+        {server for server, title in (*base_pairs.values(), *curr_pairs.values())
+         if not title.strip()},
+        key=_host_key,
+    )
+    if blank_title_hosts:
+        n = len(blank_title_hosts)
+        msg = (
+            f"{n} host(s) have scans with no STIG title (the scan could not be "
+            "matched to a benchmark), so coverage there is tracked per host, "
+            "not per STIG — a STIG not re-scanned on such a host may be counted "
+            "as Resolved. Supply --benchmarks for both sets: "
+            + ", ".join(blank_title_hosts)
+        )
+        log.warning(msg)
+        warnings.append(msg)
 
     result.findings.sort(
         key=lambda f: (_host_key(f.server), f.vuln_id, f.rule_id, f.delta_status)
