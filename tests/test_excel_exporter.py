@@ -477,6 +477,43 @@ def test_delta_summary_coverage_block_lists_pairs(tmp_path):
         assert listed == sorted(pairs), f"{label} pair rows"
 
 
+def test_delta_summary_coverage_block_names_blank_stig_title(tmp_path):
+    """A pair whose STIG title is blank (the scan matched no benchmark)
+    shows "(no STIG title)" in the STIG cell — never an empty cell, which
+    reads as "nothing missing"."""
+    result = DeltaResult(
+        findings=[_delta_finding("Not re-scanned", "V-1", current_status="")],
+        common_hosts={"SERVER01"},
+        not_rescanned_pairs={("SERVER01", "")},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Summary"]
+    r = _row_of(ws, "Host / STIG pairs not re-scanned")
+    assert ws.cell(row=r, column=2).value == 1
+    assert ws.cell(row=r + 1, column=2).value == "SERVER01"
+    assert ws.cell(row=r + 1, column=3).value == "(no STIG title)"
+
+
+def test_delta_summary_lists_each_compared_host(tmp_path):
+    """Hosts compared: the count stays in column B of the label row and
+    every host is listed (sanitised) on its own row beneath it, so the
+    reader sees WHICH hosts were compared, not only how many."""
+    result = DeltaResult(
+        findings=[_delta_finding("Persisting", "V-1")],
+        common_hosts={"SERVER02", "SERVER01", "=HOST"},
+    )
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(result, out)
+    ws = load_workbook(out)["Summary"]
+    r = _row_of(ws, "Hosts compared")
+    assert ws.cell(row=r, column=2).value == 3
+    listed = [ws.cell(row=r + 1 + i, column=2).value for i in range(3)]
+    assert listed == ["'=HOST", "SERVER01", "SERVER02"]
+    # The next label follows the host rows directly.
+    assert ws.cell(row=r + 4, column=1).value == "Host / STIG pairs not re-scanned"
+
+
 def test_delta_summary_keeps_resolved_caveat_footer(tmp_path):
     """The sentence that stops a reader over-reading the Resolved count."""
     result = DeltaResult(

@@ -18,6 +18,7 @@ from app.processors.delta import (
     DELTA_STATUSES,
     DeltaFinding,
     DeltaResult,
+    _format_pairs,
     _rule_key,
     _rule_stem,
     _stig_key,
@@ -893,3 +894,28 @@ class TestDeterministicCoverageSpelling:
         # Sorted order, so the spelling is also predictable.
         assert forward.common_hosts == {"SERVER01"}
         assert forward.not_rescanned_pairs == {("HOST-B", "Edge STIG Manual")}
+
+
+class TestFormatPairsCap:
+    """A coverage warning names at most 20 pairs; beyond that it says how
+    many more there are and points at the Coverage block, and the pair
+    count at the head of the warning is always present."""
+
+    def test_exactly_twenty_pairs_have_no_suffix(self):
+        pairs = {("HOST-A", f"STIG {i:02d}") for i in range(20)}
+        text = _format_pairs(pairs)
+        assert text.count("HOST-A / STIG ") == 20
+        assert "more" not in text
+
+    def test_warning_lists_twenty_pairs_then_says_how_many_more(self):
+        pairs = {("HOST-A", f"STIG {i:02d}") for i in range(21)}
+        result = compute_delta(
+            [], [],
+            baseline_coverage={("HOST-A", "Win2022 STIG"), *pairs},
+            current_coverage={("HOST-A", "Win2022 STIG")},
+        )
+        assert result.not_rescanned_pairs == pairs
+        msg = next(w for w in result.warnings if "not re-scanned" in w)
+        assert msg.startswith("21 baseline host/STIG pair(s)")
+        assert msg.count("HOST-A / STIG ") == 20
+        assert "… and 1 more" in msg

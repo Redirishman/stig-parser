@@ -367,14 +367,20 @@ class ExcelExporter:
         row += 1  # spacer
 
         # ── Table 2: Coverage ─────────────────────────────────────────
-        # One row per (host, STIG) pair that was NOT compared — host in
+        # Each compared host on its own row (column B) under the count, and
+        # one row per (host, STIG) pair that was NOT compared — host in
         # column B, STIG in column C — so a STIG nobody re-scanned can never
-        # be read as remediated. Both values are scan-derived text.
+        # be read as remediated. A blank STIG title (scan matched no
+        # benchmark) is spelled out rather than left as an empty cell that
+        # reads as "nothing missing". All values are scan-derived text.
         h(row, 1, "Coverage")
         row += 1
         b(row, 1, "Hosts compared")
         b(row, 2, len(delta.common_hosts))
         row += 1
+        for host in sorted(delta.common_hosts):
+            b(row, 2, _sanitize_cell(host))
+            row += 1
         for label, pairs in (
             ("Host / STIG pairs not re-scanned", delta.not_rescanned_pairs),
             ("Host / STIG pairs newly scanned", delta.newly_scanned_pairs),
@@ -384,7 +390,7 @@ class ExcelExporter:
             row += 1
             for host, stig in sorted(pairs):
                 b(row, 2, _sanitize_cell(host))
-                b(row, 3, _sanitize_cell(stig))
+                b(row, 3, _sanitize_cell(stig.strip() or "(no STIG title)"))
                 row += 1
         row += 1  # spacer
 

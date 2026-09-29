@@ -334,7 +334,7 @@ def _format_pairs(pairs: set[Pair]) -> str:
     shown = [f"{s} / {t or '(no STIG title)'}" for s, t in ordered[:_MAX_PAIRS_IN_WARNING]]
     extra = len(ordered) - len(shown)
     if extra > 0:
-        shown.append(f"(+{extra} more — see the Coverage block)")
+        shown.append(f"… and {extra} more (see the Coverage block)")
     return "; ".join(shown)
 
 
