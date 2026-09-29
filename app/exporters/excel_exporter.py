@@ -367,23 +367,25 @@ class ExcelExporter:
         row += 1  # spacer
 
         # ── Table 2: Coverage ─────────────────────────────────────────
+        # One row per (host, STIG) pair that was NOT compared — host in
+        # column B, STIG in column C — so a STIG nobody re-scanned can never
+        # be read as remediated. Both values are scan-derived text.
         h(row, 1, "Coverage")
         row += 1
         b(row, 1, "Hosts compared")
         b(row, 2, len(delta.common_hosts))
         row += 1
-        b(row, 1, "Hosts not re-scanned")
-        b(row, 2, len(delta.only_baseline_hosts))
-        row += 1
-        for host in sorted(delta.only_baseline_hosts):
-            b(row, 2, _sanitize_cell(host))
+        for label, pairs in (
+            ("Host / STIG pairs not re-scanned", delta.not_rescanned_pairs),
+            ("Host / STIG pairs newly scanned", delta.newly_scanned_pairs),
+        ):
+            b(row, 1, label)
+            b(row, 2, len(pairs))
             row += 1
-        b(row, 1, "New hosts")
-        b(row, 2, len(delta.only_current_hosts))
-        row += 1
-        for host in sorted(delta.only_current_hosts):
-            b(row, 2, _sanitize_cell(host))
-            row += 1
+            for host, stig in sorted(pairs):
+                b(row, 2, _sanitize_cell(host))
+                b(row, 3, _sanitize_cell(stig))
+                row += 1
         row += 1  # spacer
 
         # ── Table 3: Warnings ─────────────────────────────────────────
@@ -409,8 +411,8 @@ class ExcelExporter:
             column=1,
             value=(
                 "Note: 'Resolved' means a baseline finding is absent from the "
-                "current scan on a host present in BOTH runs. Hosts not "
-                "re-scanned are listed above and are never counted as resolved."
+                "current scan of the SAME host and STIG. Pairs not re-scanned "
+                "are listed above and are never counted as resolved."
             ),
         )
         note.font = Font(name="Arial", size=9, italic=True, color="808080")

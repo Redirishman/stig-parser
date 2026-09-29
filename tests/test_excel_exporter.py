@@ -331,6 +331,8 @@ def test_delta_column_fill_per_status(tmp_path):
             _delta_finding("New", "V-1"),
             _delta_finding("Resolved", "V-2", current_status=""),
             _delta_finding("Persisting", "V-3"),
+            _delta_finding("Not re-scanned", "V-4", current_status=""),
+            _delta_finding("Newly scanned", "V-5", baseline_status=""),
         ],
         common_hosts={"SERVER01"},
     )
@@ -342,10 +344,13 @@ def test_delta_column_fill_per_status(tmp_path):
         ws.cell(row=r, column=1).value: ws.cell(row=r, column=1).fill.start_color.rgb[-6:]
         for r in range(2, ws.max_row + 1)
     }
+    assert set(fills) == set(DELTA_STATUSES), "every status must carry a fill"
     assert fills == {
-        "New": "FFC7CE",         # red-ish: regression
-        "Resolved": "C6EFCE",    # green: remediated
-        "Persisting": "FFEB9C",  # amber: still open
+        "New": "FFC7CE",             # red-ish: regression
+        "Resolved": "C6EFCE",        # green: remediated
+        "Persisting": "FFEB9C",      # amber: still open
+        "Not re-scanned": "D9D9D9",  # grey: nothing to compare against
+        "Newly scanned": "DDEBF7",   # light blue: nothing to compare against
     }
 
 
@@ -396,7 +401,8 @@ def test_delta_summary_countifs_addresses_live_layout(tmp_path):
         for sev in ("CAT I", "CAT II", "CAT III")
     }
     assert formulas == expected
-    assert len(formulas) == 9  # 3 delta statuses x 3 severities
+    assert len(DELTA_STATUSES) == 5  # spec R2-5
+    assert len(formulas) == 3 * len(DELTA_STATUSES)  # every status x 3 severities
 
 
 def test_delta_summary_total_is_severity_independent(tmp_path):
@@ -422,17 +428,34 @@ def test_delta_summary_total_is_severity_independent(tmp_path):
     assert total == f'=COUNTIF(Findings!${d}:${d},"New")'
 
 
-def test_delta_summary_coverage_pairs_labels_with_host_lists(tmp_path):
-    """The label→list pairing is what stops the workbook presenting a host that
-    was never re-scanned as remediated — assert it positionally, not by
-    substring search over a flattened blob."""
-    only_base = {"OLDHOST-B", "OLDHOST-A"}
-    only_curr = {"NEWHOST-A"}
+def test_delta_summary_has_a_row_per_status(tmp_path):
+    """Spec R2-5: the Summary counts every status, so a reader sees how much
+    of the baseline was never compared (Not re-scanned) next to Resolved."""
+    out = tmp_path / "delta.xlsx"
+    ExcelExporter().export_delta(
+        DeltaResult(findings=[_delta_finding("New")], common_hosts={"SERVER01"}), out
+    )
+    ws = load_workbook(out)["Summary"]
+    d = _delta_col_letter("Delta")
+    for status in DELTA_STATUSES:
+        r = _row_of(ws, status)
+        assert ws.cell(row=r, column=5).value == f'=COUNTIF(Findings!${d}:${d},"{status}")'
+
+
+def test_delta_summary_coverage_block_lists_pairs(tmp_path):
+    """The Coverage block names every (host, STIG) pair that was not compared
+    — host in column B, STIG in column C, one row per pair — so a STIG that
+    nobody re-scanned can never be read as remediated. Assert it
+    positionally, not by substring search over a flattened blob."""
+    not_rescanned = {("SERVER01", "Microsoft Edge STIG"), ("OLDHOST", "Win2022 STIG")}
+    newly_scanned = {("NEWHOST", "Win11 STIG")}
     result = DeltaResult(
         findings=[_delta_finding("Persisting", "V-1")],
         common_hosts={"SERVER01", "SERVER02", "SERVER03"},
-        only_baseline_hosts=only_base,
-        only_current_hosts=only_curr,
+        only_baseline_hosts={"OLDHOST"},
+        only_current_hosts={"NEWHOST"},
+        not_rescanned_pairs=not_rescanned,
+        newly_scanned_pairs=newly_scanned,
     )
     out = tmp_path / "delta.xlsx"
     ExcelExporter().export_delta(result, out)
@@ -441,14 +464,17 @@ def test_delta_summary_coverage_pairs_labels_with_host_lists(tmp_path):
     # Distinct counts (3 / 2 / 1) so a bucket mix-up can't coincidentally match.
     assert ws.cell(row=_row_of(ws, "Hosts compared"), column=2).value == 3
 
-    for label, hosts in (
-        ("Hosts not re-scanned", only_base),
-        ("New hosts", only_curr),
+    for label, pairs in (
+        ("Host / STIG pairs not re-scanned", not_rescanned),
+        ("Host / STIG pairs newly scanned", newly_scanned),
     ):
         r = _row_of(ws, label)
-        assert ws.cell(row=r, column=2).value == len(hosts), f"{label} count"
-        listed = [ws.cell(row=r + 1 + i, column=2).value for i in range(len(hosts))]
-        assert listed == sorted(hosts), f"{label} host list"
+        assert ws.cell(row=r, column=2).value == len(pairs), f"{label} count"
+        listed = [
+            (ws.cell(row=r + 1 + i, column=2).value, ws.cell(row=r + 1 + i, column=3).value)
+            for i in range(len(pairs))
+        ]
+        assert listed == sorted(pairs), f"{label} pair rows"
 
 
 def test_delta_summary_keeps_resolved_caveat_footer(tmp_path):
@@ -468,6 +494,7 @@ def test_delta_summary_keeps_resolved_caveat_footer(tmp_path):
         if ws.cell(row=r, column=1).value is not None
     )
     assert "never counted as resolved" in text
+    assert "same host and stig" in text.lower()
 
 
 def test_export_delta_sanitizes_formula_injection(tmp_path):
@@ -486,7 +513,13 @@ def test_export_delta_sanitizes_formula_injection(tmp_path):
     )
     out = tmp_path / "delta.xlsx"
     ExcelExporter().export_delta(
-        DeltaResult(findings=[evil], only_current_hosts={"=HYPERLINK(1)"}), out
+        DeltaResult(
+            findings=[evil],
+            only_current_hosts={"=HYPERLINK(1)"},
+            newly_scanned_pairs={("=HYPERLINK(1)", "=cmd()")},
+            not_rescanned_pairs={("+OLDHOST", "-Edge STIG")},
+        ),
+        out,
     )
     wb = load_workbook(out)
     ws = wb["Findings"]
@@ -496,16 +529,19 @@ def test_export_delta_sanitizes_formula_injection(tmp_path):
     )
     assert str(title_cell).startswith("'=")
 
-    # The coverage block on the Summary sheet echoes hostnames verbatim, so
-    # it needs the same neutralization.
+    # The coverage block on the Summary sheet echoes hostnames AND STIG
+    # titles verbatim (one pair per row), so both columns need the same
+    # neutralization.
     summary = wb["Summary"]
-    host_cells = [
-        summary.cell(row=r, column=2).value
+    cells = [
+        summary.cell(row=r, column=c).value
         for r in range(1, summary.max_row + 1)
-        if isinstance(summary.cell(row=r, column=2).value, str)
+        for c in (2, 3)
+        if isinstance(summary.cell(row=r, column=c).value, str)
     ]
-    assert "'=HYPERLINK(1)" in host_cells
-    assert "=HYPERLINK(1)" not in host_cells
+    for evil_value in ("=HYPERLINK(1)", "=cmd()", "+OLDHOST", "-Edge STIG"):
+        assert "'" + evil_value in cells, f"{evil_value!r} not written to the coverage block"
+        assert evil_value not in cells, f"{evil_value!r} written unsanitised"
 
 
 def test_export_delta_accepts_single_bucket_result(tmp_path):
@@ -528,11 +564,16 @@ def test_export_delta_empty_raises(tmp_path):
 
 
 def test_export_delta_summary_has_coverage_block(tmp_path):
+    # Shaped as compute_delta builds it: a host only in one side's coverage
+    # always carries at least one not-re-scanned / newly-scanned pair, and
+    # the Coverage block lists those pairs (spec R2-5).
     result = DeltaResult(
         findings=[_delta_finding("Persisting", "V-1", server="SERVER01")],
         common_hosts={"SERVER01"},
         only_baseline_hosts={"OLDHOST"},
         only_current_hosts={"NEWHOST"},
+        not_rescanned_pairs={("OLDHOST", "Win2022 STIG")},
+        newly_scanned_pairs={("NEWHOST", "Win2022 STIG")},
     )
     out = tmp_path / "delta.xlsx"
     ExcelExporter().export_delta(result, out)
@@ -545,8 +586,8 @@ def test_export_delta_summary_has_coverage_block(tmp_path):
         for c in range(1, 4)
         if ws.cell(row=r, column=c).value is not None
     )
-    assert "OLDHOST" in text     # not re-scanned host listed
-    assert "NEWHOST" in text     # new host listed
+    assert "OLDHOST" in text     # not re-scanned pair listed
+    assert "NEWHOST" in text     # newly scanned pair listed
     assert "Coverage" in text
 
 
