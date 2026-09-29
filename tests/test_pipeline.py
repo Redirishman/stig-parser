@@ -254,3 +254,83 @@ def test_parse_stage_zero_rule_result_scan_is_warned_and_not_covered(tmp_path):
         w.startswith("empty.xml: 0 rule results") and "--benchmarks" in w
         for w in result.warnings
     ), result.warnings
+
+
+_EMPTY_CKLB = (
+    '{"target_data": {"host_name": "HOST-C", "ip_address": "10.0.0.9"}, '
+    '"stigs": [{"stig_name": "Win2022 STIG", "rules": []}]}'
+)
+
+# A well-formed Nessus export with no Policy Compliance items: a
+# vulnerability scan handed in as a compliance scan.
+_VULN_ONLY_NESSUS = (
+    '<NessusClientData_v2><Report><ReportHost name="HOST-N">'
+    '<HostProperties><tag name="host-ip">10.0.0.7</tag></HostProperties>'
+    '<ReportItem port="443" severity="2" pluginID="12345" '
+    'pluginName="Some CVE" pluginFamily="General"/>'
+    "</ReportHost></Report></NessusClientData_v2>"
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "body"),
+    [("empty.cklb", _EMPTY_CKLB), ("vulnscan.nessus", _VULN_ONLY_NESSUS)],
+    ids=["cklb", "nessus"],
+)
+def test_parse_stage_zero_row_self_contained_file_is_warned_and_not_covered(
+    tmp_path, name, body
+):
+    # A CKLB with no rules, or a .nessus with no compliance items, parses
+    # to zero rows. Like a zero-rule-result XCCDF file it is not a scan:
+    # it contributes no coverage pair and the operator is told by name,
+    # not left to notice a host quietly missing from the report.
+    good = tmp_path / "all_pass.xml"
+    good.write_text(_ALL_PASS_XCCDF, encoding="utf-8")
+    empty = tmp_path / name
+    empty.write_text(body, encoding="utf-8")
+    result = parse_stage([good, empty], [], tmp_path / "e", allow_empty=True)
+    assert {server for server, _ in result.coverage} == {"HOST-A"}
+    assert any(
+        w.startswith(f"{name}: 0 rule results") and "not counted as a scan" in w
+        for w in result.warnings
+    ), result.warnings
+
+
+def test_pipeline_error_carries_warnings_collected_so_far(tmp_path):
+    # When parse_stage gives up, the per-file warnings gathered before the
+    # raise are the diagnosis. They must ride on the exception so the
+    # caller can show them, not vanish with the ParseResult that was never
+    # built. Here: two zero-row files -> "no rule results" error, and both
+    # per-file warnings are on it.
+    empty_cklb = tmp_path / "empty.cklb"
+    empty_cklb.write_text(_EMPTY_CKLB, encoding="utf-8")
+    vuln_only = tmp_path / "vulnscan.nessus"
+    vuln_only.write_text(_VULN_ONLY_NESSUS, encoding="utf-8")
+    with pytest.raises(PipelineError) as exc:
+        parse_stage([empty_cklb, vuln_only], [], tmp_path / "e", allow_empty=True)
+    assert "no rule results" in str(exc.value).lower()
+    assert isinstance(exc.value.warnings, list)
+    assert any(w.startswith("empty.cklb: 0 rule results") for w in exc.value.warnings), (
+        exc.value.warnings
+    )
+    assert any(w.startswith("vulnscan.nessus: 0 rule results") for w in exc.value.warnings), (
+        exc.value.warnings
+    )
+
+
+def test_pipeline_error_carries_warnings_when_nothing_parses(tmp_path):
+    # The earliest raise ("No valid results files") happens after the
+    # per-file "Could not parse" warnings were recorded; they must not be
+    # lost either.
+    bad = tmp_path / "broken.xml"
+    bad.write_text("<TestResult><unclosed>", encoding="utf-8")
+    with pytest.raises(PipelineError) as exc:
+        parse_stage([bad], [], tmp_path / "e")
+    assert "no valid results files" in str(exc.value).lower()
+    assert any("broken.xml" in w for w in exc.value.warnings), exc.value.warnings
+
+
+def test_pipeline_error_warnings_default_to_empty_list():
+    # Callers that raise it themselves (e.g. a cancel_check) keep working.
+    assert PipelineError("cancelled").warnings == []
+

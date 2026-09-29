@@ -915,6 +915,69 @@ class TestUntitledScanFailsClosedEndToEnd:
         assert any("cannot be verified as re-scanned" in w for w in listed), listed
 
 
+_EMPTY_CKLB = (
+    '{"target_data": {"host_name": "HOST-C", "ip_address": "10.0.0.9"}, '
+    '"stigs": [{"stig_name": "Win2022 STIG", "rules": []}]}'
+)
+_VULN_ONLY_NESSUS = (
+    '<NessusClientData_v2><Report><ReportHost name="HOST-N">'
+    '<HostProperties><tag name="host-ip">10.0.0.7</tag></HostProperties>'
+    '<ReportItem port="443" severity="2" pluginID="12345" '
+    'pluginName="Some CVE" pluginFamily="General"/>'
+    "</ReportHost></Report></NessusClientData_v2>"
+)
+
+
+def _first_index(records, level: int, needle: str) -> int:
+    """Index of the first app.cli record at *level* containing *needle*."""
+    return next(
+        i for i, r in enumerate(records)
+        if r.name == "app.cli" and r.levelno == level and needle in r.message
+    )
+
+
+class TestParseFailureKeepsWarningsEndToEnd:
+    """When parse_stage raises, the per-file warnings it collected first are
+    the diagnosis ("empty.cklb: 0 rule results"). Both subcommands must log
+    them BEFORE the error instead of dropping them with the failed
+    ParseResult - otherwise the operator sees only "No rule results were
+    found" and has to bisect."""
+
+    def test_delta_logs_parse_warnings_before_the_error(self, tmp_path, caplog):
+        good = FIXTURES / "scc_results.xml"
+        empty = tmp_path / "empty.cklb"
+        empty.write_text(_EMPTY_CKLB, encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(good),
+                "--current", str(empty),
+                "--output", str(tmp_path / "delta.xlsx"),
+            ])
+        assert rc == 1
+        messages = [r.message for r in caplog.records if r.name == "app.cli"]
+        w = _first_index(caplog.records, logging.WARNING, "empty.cklb: 0 rule results")
+        e = _first_index(caplog.records, logging.ERROR, "No rule results were found")
+        assert caplog.records[w].message.startswith("Current scan set: "), messages
+        assert caplog.records[e].message.startswith("Current scan set: "), messages
+        assert w < e, messages
+
+    def test_report_logs_parse_warnings_before_the_error(self, tmp_path, caplog):
+        vuln_only = tmp_path / "vulnscan.nessus"
+        vuln_only.write_text(_VULN_ONLY_NESSUS, encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "report",
+                "--results", str(vuln_only),
+                "--output", str(tmp_path / "report.xlsx"),
+            ])
+        assert rc == 1
+        messages = [r.message for r in caplog.records if r.name == "app.cli"]
+        w = _first_index(caplog.records, logging.WARNING, "vulnscan.nessus: 0 rule results")
+        e = _first_index(caplog.records, logging.ERROR, "No rule results were found")
+        assert w < e, messages
+
+
 class TestReportBackCompatEndToEnd:
     def test_bare_results_produces_report(self, tmp_path):
         """The historical ``stig-parser --results ...`` form still runs."""

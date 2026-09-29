@@ -236,6 +236,10 @@ def _run_report(args: argparse.Namespace) -> int:
         try:
             result = parse_stage(results_paths, benchmark_paths, extract_dir)
         except PipelineError as exc:
+            # The per-file warnings collected before the failure are the
+            # diagnosis; show them ahead of the error.
+            for w in exc.warnings:
+                log.warning(w)
             log.error("%s", exc)
             return 1
 
@@ -303,12 +307,16 @@ def _run_delta(args: argparse.Namespace) -> int:
         # ZIP twice (DISA STIG library ZIPs are large). allow_empty lets a
         # fully remediated scan set through — zero actionable findings is a
         # legitimate delta input, not a failure.
+        # On failure the per-file warnings parse_stage collected first are
+        # the diagnosis: log them, with their side, ahead of the error.
         try:
             base_res = parse_stage(
                 baseline_paths, benchmark_paths, extract_dir / "baseline",
                 allow_empty=True,
             )
         except PipelineError as exc:
+            for w in exc.warnings:
+                log.warning("Baseline scan set: %s", w)
             log.error("Baseline scan set: %s", exc)
             return 1
         try:
@@ -317,6 +325,8 @@ def _run_delta(args: argparse.Namespace) -> int:
                 allow_empty=True,
             )
         except PipelineError as exc:
+            for w in exc.warnings:
+                log.warning("Current scan set: %s", w)
             log.error("Current scan set: %s", exc)
             return 1
 

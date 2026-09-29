@@ -26,7 +26,15 @@ class PipelineError(Exception):
     """Raised when the pipeline cannot produce actionable findings.
 
     The message is user-safe and intended for display in the UI / CLI.
+    ``warnings`` carries the per-file warnings :func:`parse_stage` had
+    collected before it gave up — they are the diagnosis ("x.cklb: 0 rule
+    results"), so a caller logs them ahead of the error instead of losing
+    them with the ``ParseResult`` that was never built.
     """
+
+    def __init__(self, message: str, warnings: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.warnings: list[str] = list(warnings or [])
 
 
 @dataclass
@@ -75,6 +83,12 @@ def parse_stage(
     # .nessus compliance scans (Tenable XML). Everything else goes through
     # the XCCDF pipeline.
     _SELF_CONTAINED = {".cklb": CKLBParser, ".nessus": NessusComplianceParser}
+    # Why a self-contained file can parse cleanly yet hold zero rows.
+    _ZERO_ROW_HINT = {
+        ".cklb": "the checklist has no rules",
+        ".nessus": "no Policy Compliance items (a vulnerability scan is not a "
+                   "compliance scan)",
+    }
     sc_paths = [p for p in results_paths if p.suffix.lower() in _SELF_CONTAINED]
     xccdf_paths = [p for p in results_paths if p.suffix.lower() not in _SELF_CONTAINED]
 
@@ -119,9 +133,17 @@ def parse_stage(
         else:
             sc_file_count += 1
             sc_findings.extend(parsed)
+            if not parsed:
+                # Zero rows contribute no coverage pair (built from rows,
+                # below): like a zero-rule-result XCCDF file this is not a
+                # scan, and the operator must be told which file, by name.
+                hint = _ZERO_ROW_HINT[path.suffix.lower()]
+                warnings.append(
+                    f"{path.name}: 0 rule results — not counted as a scan; {hint}"
+                )
 
     if not scan_results and sc_file_count == 0:
-        raise PipelineError("No valid results files could be parsed.")
+        raise PipelineError("No valid results files could be parsed.", warnings)
 
     _check()
     # Coverage comes from every parsed row (self-contained formats emit all
@@ -153,7 +175,8 @@ def parse_stage(
             f"No rule results were found in any of the {total_files} results "
             f"file(s). The files may not be scan results (XCCDF, CKLB, or "
             f".nessus), or may use an unrecognised structure. Check the "
-            f"warnings for details."
+            f"warnings for details.",
+            warnings,
         )
     if not findings and not allow_empty:
         raise PipelineError(
@@ -161,7 +184,8 @@ def parse_stage(
             f"file(s), but none had an actionable status (Open / Not Reviewed "
             f"/ Error / Unknown). Either every rule passed, or the results "
             f"were not matched to the supplied STIG benchmarks. Check the "
-            f"warnings."
+            f"warnings.",
+            warnings,
         )
 
     return ParseResult(
