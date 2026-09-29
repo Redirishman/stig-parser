@@ -143,6 +143,15 @@ data "aws_iam_policy_document" "api" {
     effect    = "Allow"
     actions   = ["s3:PutObject"]
     resources = ["${var.uploads_bucket_arn}/jobs/*"]
+
+    # This identity-policy condition is evaluated when the presigned request is
+    # used, not when Lambda signs it. A copied URL therefore cannot fall back to
+    # the public S3 endpoint.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceVpce"
+      values   = [var.api_s3_client_endpoint_id]
+    }
   }
 
   statement {
@@ -150,12 +159,27 @@ data "aws_iam_policy_document" "api" {
     effect    = "Allow"
     actions   = ["s3:GetObject"]
     resources = ["${var.artifacts_bucket_arn}/jobs/*"]
+
+    # Browser GET uses the interface endpoint; the API's HeadObject existence
+    # check uses the free S3 gateway endpoint. Both are private paths.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceVpce"
+      values = [
+        var.api_s3_client_endpoint_id,
+        var.api_s3_gateway_endpoint_id,
+      ]
+    }
   }
 
   statement {
-    sid       = "JobRecords"
-    effect    = "Allow"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    sid    = "JobRecords"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]
     resources = [var.job_table_arn]
   }
 
@@ -166,14 +190,13 @@ data "aws_iam_policy_document" "api" {
     resources = [var.state_machine_arn]
   }
 
-  # Cancel. StopExecution is granted on the state machine's EXECUTIONS, not on
-  # the state machine itself — a common way to get this wrong is to reuse the
-  # StartExecution resource above, which produces a policy that never matches
-  # and an AccessDenied the first time an operator clicks Cancel.
+  # Cancel/recover. These actions are granted on the state machine's EXECUTIONS,
+  # not on the state machine itself. DescribeExecution resolves an ambiguous
+  # StartExecution response without falsely changing a running job to error.
   statement {
     sid       = "CancelPipeline"
     effect    = "Allow"
-    actions   = ["states:StopExecution"]
+    actions   = ["states:DescribeExecution", "states:StopExecution"]
     resources = [local.execution_arn_pattern]
   }
 
@@ -210,7 +233,7 @@ data "aws_iam_policy_document" "parser" {
   statement {
     sid       = "JobRecords"
     effect    = "Allow"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
     resources = [var.job_table_arn]
   }
 }
@@ -230,7 +253,7 @@ data "aws_iam_policy_document" "enricher" {
   statement {
     sid       = "JobRecords"
     effect    = "Allow"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
     resources = [var.job_table_arn]
   }
 
@@ -262,7 +285,7 @@ data "aws_iam_policy_document" "exporter" {
   statement {
     sid       = "JobRecords"
     effect    = "Allow"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
     resources = [var.job_table_arn]
   }
 }
@@ -275,7 +298,7 @@ data "aws_iam_policy_document" "marker" {
   statement {
     sid       = "JobRecords"
     effect    = "Allow"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
     resources = [var.job_table_arn]
   }
 }

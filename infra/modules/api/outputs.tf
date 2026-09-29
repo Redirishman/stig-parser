@@ -20,3 +20,8 @@ output "spa_bucket" {
   description = "SPA asset bucket (apigw_s3_proxy mode only; null otherwise). #3 uploads the React bundle here."
   value       = local.serve_spa_from_s3 ? aws_s3_bucket.spa[0].bucket : null
 }
+
+output "upload_cors_allowed_origins" {
+  description = "Exact browser origins configured on the uploads bucket for presigned PUT requests."
+  value       = local.upload_cors_allowed_origins
+}

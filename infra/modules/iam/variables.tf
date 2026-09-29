@@ -13,6 +13,28 @@ variable "artifacts_bucket_arn" {
   type        = string
 }
 
+variable "api_s3_client_endpoint_id" {
+  description = "S3 interface endpoint id required for browser use of API-generated presigned URLs."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = startswith(var.api_s3_client_endpoint_id, "vpce-")
+    error_message = "api_s3_client_endpoint_id must be a VPC endpoint id beginning with vpce-."
+  }
+}
+
+variable "api_s3_gateway_endpoint_id" {
+  description = "S3 gateway endpoint id used by the API Lambda for object existence checks."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = startswith(var.api_s3_gateway_endpoint_id, "vpce-")
+    error_message = "api_s3_gateway_endpoint_id must be a VPC endpoint id beginning with vpce-."
+  }
+}
+
 variable "job_table_arn" {
   description = "ARN of the DynamoDB job table."
   type        = string

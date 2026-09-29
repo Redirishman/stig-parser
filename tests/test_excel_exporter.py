@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
-from app.exporters.excel_exporter import ExcelExporter
+from app.exporters.excel_exporter import (
+    ExcelExporter,
+    _FORMULA_PREFIXES,
+    _formula_quote,
+    _sanitize_cell,
+)
 from app.parsers.base import Finding
 
 
@@ -116,6 +121,80 @@ class TestSummarySheet:
         ]
         assert len(formula_cells) > 0
         assert all("Findings!" in v for v in formula_cells)
+
+
+class TestFormulaInjection:
+    """Guards the CWE-1236 fix: scan-derived text must never execute as a
+    formula in the accreditation-facing workbook."""
+
+    # ── _formula_quote: values interpolated into COUNTIFS criteria ────────
+    def test_formula_quote_wraps_plain_value(self):
+        assert _formula_quote("SERVER01") == '"SERVER01"'
+
+    def test_formula_quote_escapes_embedded_double_quote(self):
+        # A bare " would close the criteria literal and let the rest of the
+        # value become live formula text; it must be doubled per Excel rules.
+        assert _formula_quote('a"b') == '"a""b"'
+
+    def test_formula_quote_neutralizes_criteria_breakout(self):
+        # Classic breakout payload: close the string, inject a call, reopen.
+        payload = '","")+cmd|calc!A1&COUNTIF(A:A,"'
+        quoted = _formula_quote(payload)
+        # Every input quote is doubled; no lone " survives to break the literal.
+        assert quoted.count('""') == payload.count('"')
+        assert quoted.startswith('"') and quoted.endswith('"')
+
+    def test_formula_quote_stringifies_non_str(self):
+        assert _formula_quote(42) == '"42"'
+
+    # ── _sanitize_cell: leading formula-trigger characters ────────────────
+    @pytest.mark.parametrize("prefix", _FORMULA_PREFIXES)
+    def test_sanitize_prefixes_dangerous_leading_char(self, prefix):
+        payload = f"{prefix}HYPERLINK(\"http://evil\")"
+        assert _sanitize_cell(payload) == "'" + payload
+
+    def test_sanitize_leaves_safe_value_untouched(self):
+        assert _sanitize_cell("SERVER01") == "SERVER01"
+
+    def test_sanitize_passes_non_str_through(self):
+        assert _sanitize_cell(7) == 7
+
+    # ── End-to-end: the saved workbook is not injectable ──────────────────
+    def test_malicious_server_is_escaped_in_summary_countifs(self, tmp_path):
+        evil = 'HOST","")+SUM(1,1)+COUNTIF(A:A,"'
+        exporter = ExcelExporter()
+        path = tmp_path / "evil.xlsx"
+        exporter.export([_finding(server=evil)], path)
+        wb = load_workbook(str(path))
+        ws = wb["Summary"]
+
+        countifs = [
+            cell.value
+            for row in ws.iter_rows()
+            for cell in row
+            if isinstance(cell.value, str) and cell.value.startswith("=COUNTIFS")
+        ]
+        server_formulas = [f for f in countifs if "$F:$F" in f]
+        assert server_formulas, "no By-Server COUNTIFS formula found"
+        for f in server_formulas:
+            # The payload's quotes must be doubled inside the formula; a lone
+            # HOST" fragment would mean the literal was broken out of.
+            assert 'HOST""' in f
+            assert 'HOST","' not in f
+
+    def test_malicious_leading_char_is_neutralized_in_findings_sheet(self, tmp_path):
+        evil = '=1+1'
+        exporter = ExcelExporter()
+        path = tmp_path / "lead.xlsx"
+        exporter.export([_finding(server=evil)], path)
+        wb = load_workbook(str(path))
+        ws = wb["Findings"]
+
+        # Server is column F (6); data starts at row 2.
+        cell = ws.cell(row=2, column=6).value
+        assert cell == "'=1+1", "leading '=' was not neutralized to literal text"
+        # data_type 's' (string), not 'f' (formula) — Excel won't evaluate it.
+        assert ws.cell(row=2, column=6).data_type == "s"
 
 
 class TestErrorCases:

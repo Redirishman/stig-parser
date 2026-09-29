@@ -73,6 +73,23 @@ describe('useJob', () => {
     expect(messages).toContain('Exporting…');
   });
 
+  it('periodically reconciles a durable queued launch intent', async () => {
+    vi.spyOn(api, 'getJob').mockResolvedValue(
+      job({ status: 'queued', progress: 'Queued…' }),
+    );
+    const startJob = vi.mocked(api.startJob);
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.submit(files, true); });
+    expect(startJob).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+
+    expect(startJob).toHaveBeenCalledTimes(2);
+    // The queued record owns the original AI decision; retries cannot change it.
+    expect(startJob).toHaveBeenLastCalledWith('j1', false);
+  });
+
   it('does not log the same progress message twice', async () => {
     vi.spyOn(api, 'getJob').mockResolvedValue(job({ progress: 'Parsing…' }));
     const { result } = renderHook(() => useJob());

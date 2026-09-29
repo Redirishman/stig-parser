@@ -14,7 +14,9 @@ from app.core.job_store import DynamoJobStore
 
 # Job records and artifacts are keyed off the job id; a stage re-run overwrites
 # rather than appends (spec §6 idempotency contract), so /tmp reuse is safe.
-WORK_ROOT = Path("/tmp")
+# /tmp is Lambda's only writable path (ephemeral, per-instance) — not a shared
+# world-writable dir, so Bandit's B108 does not apply here.
+WORK_ROOT = Path("/tmp")  # nosec B108
 
 
 class StageFailed(RuntimeError):
@@ -42,13 +44,21 @@ def region() -> str:
 
 def artifact_store() -> S3ArtifactStore:
     """Store for generated artifacts (findings.json, report.xlsx)."""
-    return S3ArtifactStore(_require("ARTIFACTS_BUCKET"), region())
+    return S3ArtifactStore(
+        _require("ARTIFACTS_BUCKET"),
+        region(),
+        presign_endpoint_url=os.environ.get("S3_PRESIGN_ENDPOINT_URL"),
+    )
 
 
 def upload_store() -> S3ArtifactStore:
     """Store for raw operator uploads — a separate bucket with its own, shorter
     retention (D5), which is why the parse stage takes an ``input_store``."""
-    return S3ArtifactStore(_require("UPLOADS_BUCKET"), region())
+    return S3ArtifactStore(
+        _require("UPLOADS_BUCKET"),
+        region(),
+        presign_endpoint_url=os.environ.get("S3_PRESIGN_ENDPOINT_URL"),
+    )
 
 
 def job_store() -> DynamoJobStore:

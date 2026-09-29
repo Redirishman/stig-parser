@@ -13,6 +13,17 @@ locals {
   partition         = data.aws_partition.current.partition
   region            = data.aws_region.current.name
   serve_spa_from_s3 = var.spa_serving_mode == "apigw_s3_proxy"
+
+  # Browser Origin excludes the API stage path. Managed SPA modes are served
+  # from the private API host itself; an externally served SPA must name its
+  # exact same-origin facade explicitly.
+  managed_upload_cors_origins = var.spa_serving_mode == "none" ? toset([]) : toset([
+    regex("^https://[^/]+", aws_api_gateway_stage.this.invoke_url),
+  ])
+  upload_cors_allowed_origins = setunion(
+    local.managed_upload_cors_origins,
+    var.additional_upload_cors_origins,
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -210,6 +221,46 @@ resource "aws_s3_bucket_versioning" "spa" {
   }
 }
 
+# Match the TLS-only + ACLs-disabled posture the CUI buckets carry (storage
+# module). The bundle is public-by-nature, but the bucket's own policy should
+# still reject plaintext-HTTP access and disable ACLs rather than relying on
+# defaults.
+resource "aws_s3_bucket_ownership_controls" "spa" {
+  count = local.serve_spa_from_s3 ? 1 : 0
+
+  bucket = aws_s3_bucket.spa[0].id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+data "aws_iam_policy_document" "spa_bucket" {
+  count = local.serve_spa_from_s3 ? 1 : 0
+
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.spa[0].arn, "${aws_s3_bucket.spa[0].arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "spa" {
+  count = local.serve_spa_from_s3 ? 1 : 0
+
+  bucket = aws_s3_bucket.spa[0].id
+  policy = data.aws_iam_policy_document.spa_bucket[0].json
+}
+
 # API Gateway reads the bucket under this role — the browser never talks to S3
 # for SPA assets, so the bucket stays fully private.
 data "aws_iam_policy_document" "spa_assume" {
@@ -405,5 +456,27 @@ resource "aws_api_gateway_method_settings" "this" {
     # Request/response bodies would land CUI in CloudWatch.
     data_trace_enabled = false
     metrics_enabled    = true
+  }
+}
+
+# The browser uploads directly to a presigned S3 URL. CORS is an independent
+# browser control and grants no S3 permission; IAM and the endpoint policy still
+# authorize the signed PUT. The client sets no custom headers, although user
+# agents can synthesize Content-Type from File.type.
+resource "aws_s3_bucket_cors_configuration" "uploads" {
+  bucket = var.uploads_bucket_name
+
+  cors_rule {
+    allowed_methods = ["PUT"]
+    allowed_headers = ["Content-Type"]
+    allowed_origins = sort(tolist(local.upload_cors_allowed_origins))
+    max_age_seconds = 300
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.upload_cors_allowed_origins) > 0
+      error_message = "At least one exact upload CORS origin is required; spa_serving_mode=none must set additional_upload_cors_origins."
+    }
   }
 }

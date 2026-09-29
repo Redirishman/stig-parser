@@ -1,6 +1,26 @@
 output "api_invoke_url" {
-  description = "VPC-internal API url. Reachable only from inside the VPC via the execute-api endpoint."
+  description = "Private API URL. Reachability requires an approved client CIDR, an attached network path with reciprocal routing, and private DNS forwarding."
   value       = module.api.invoke_url
+}
+
+output "execute_api_endpoint_dns_entries" {
+  description = "Endpoint DNS records supplied to the network/DNS team when configuring hybrid resolution."
+  value       = module.network.execute_api_endpoint_dns_entries
+}
+
+output "execute_api_security_group_id" {
+  description = "Dedicated endpoint SG that admits only approved API client CIDRs on TCP/443."
+  value       = module.network.execute_api_security_group_id
+}
+
+output "s3_client_endpoint_dns_entries" {
+  description = "Endpoint-specific S3 DNS records for private browser upload and report-download troubleshooting."
+  value       = module.network.s3_client_endpoint_dns_entries
+}
+
+output "s3_client_security_group_id" {
+  description = "Dedicated S3 interface-endpoint SG that admits approved client CIDRs on TCP/443."
+  value       = module.network.s3_client_security_group_id
 }
 
 output "spa_bucket" {

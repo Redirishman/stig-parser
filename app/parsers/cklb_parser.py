@@ -65,6 +65,14 @@ class CKLBParser(BaseParser):
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             log.warning("Skipping %s — not valid JSON: %s", path.name, exc)
             return None
+        except RecursionError:
+            # Deeply-nested JSON (a JSON-bomb) blows the recursion limit inside
+            # json.loads. Untrusted upload — treat as an invalid file, not a crash.
+            log.warning(
+                "Skipping %s — JSON nesting too deep (possible malicious file)",
+                path.name,
+            )
+            return None
 
         if not isinstance(doc, dict) or "stigs" not in doc:
             log.warning(

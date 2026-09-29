@@ -1,4 +1,4 @@
-# Every org decision (D1-D6, spec §2) surfaces here as a variable. None of them
+# Every org decision (D1-D7, spec §2) surfaces here as a variable. None of them
 # have values in tracked files — see terraform.tfvars.example.
 
 variable "name_prefix" {
@@ -22,6 +22,43 @@ variable "vpc_cidr" {
 variable "private_subnet_cidrs" {
   description = "One private subnet CIDR per AZ (two AZs minimum for Lambda availability)."
   type        = list(string)
+}
+
+variable "api_client_cidr_blocks" {
+  description = "Approved operator/VPN IPv4 CIDRs allowed to reach the private API endpoint on TCP/443 (D7)."
+  type        = set(string)
+  nullable    = false
+
+  validation {
+    condition = length(var.api_client_cidr_blocks) > 0 && alltrue([
+      for cidr in var.api_client_cidr_blocks :
+      try(cidrnetmask(cidr) != "0.0.0.0", false)
+    ])
+    error_message = "api_client_cidr_blocks must contain approved IPv4 CIDRs and must not include 0.0.0.0/0."
+  }
+}
+
+variable "api_client_route_management" {
+  description = "Return-route owner for API client CIDRs: module or external (D7). No default; the network team must choose."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = contains(["module", "external"], var.api_client_route_management)
+    error_message = "api_client_route_management must be either module or external."
+  }
+}
+
+variable "api_client_routes" {
+  description = "Static API-client return routes when api_client_route_management is module. Targets must already be attached."
+  type = map(object({
+    destination_cidr_block     = string
+    transit_gateway_id         = optional(string)
+    virtual_private_gateway_id = optional(string)
+    vpc_peering_connection_id  = optional(string)
+  }))
+  default  = {}
+  nullable = false
 }
 
 # --- Retention (D5: CUI records policy — confirm with the ISSO) --------------
@@ -95,7 +132,7 @@ variable "ai_killswitch_param" {
 # --- Auth (D3) ---------------------------------------------------------------
 
 variable "identity_header" {
-  description = "Header carrying the upstream-authenticated user, recorded on jobs for audit (D3). Empty records no identity. NOT a trust boundary."
+  description = "Header carrying the upstream-authenticated user, recorded for audit and used for defense-in-depth per-job ownership checks (D3). It must be injected by the trusted upstream identity layer. Empty disables per-job ownership checks."
   type        = string
   default     = ""
 }
@@ -106,6 +143,21 @@ variable "spa_serving_mode" {
   description = "How the React SPA is served privately: apigw_s3_proxy | lambda_served | none (D6)."
   type        = string
   default     = "apigw_s3_proxy"
+}
+
+variable "additional_upload_cors_origins" {
+  description = "Additional exact HTTPS origins allowed to upload directly to S3. Required for spa_serving_mode=none."
+  type        = set(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition = alltrue([
+      for origin in var.additional_upload_cors_origins :
+      can(regex("^https://[^/:@?#*\\s]+(:[0-9]{1,5})?$", origin))
+    ])
+    error_message = "Each additional upload CORS origin must be an exact HTTPS origin without a wildcard, path, query, fragment, credentials, or trailing slash."
+  }
 }
 
 # --- Observability -----------------------------------------------------------

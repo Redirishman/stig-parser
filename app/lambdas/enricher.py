@@ -14,6 +14,7 @@ Spec §4.1 (AI determinism/provenance) is binding on this stage:
   model drafted any AI text.
 * Any AI-authored text is labeled AI-drafted downstream (#4's contract).
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,8 +33,9 @@ def handler(event: dict, context: object = None) -> dict:
     if not model_id:
         # Reached only if the Choice state let an unconfigured job through.
         log.warning("enricher invoked for job %s with no BEDROCK_MODEL_ID", job_id)
-        jobs.update(
+        jobs.update_if_status(
             job_id,
+            {"running"},
             ai="disabled-globally",
             ai_error="No Bedrock model is configured for this deployment.",
         )
@@ -42,8 +44,9 @@ def handler(event: dict, context: object = None) -> dict:
     # Sub-project #4 replaces this branch with the real Bedrock call. Until it
     # lands, say so on the record instead of pretending enrichment happened.
     log.warning("enrichment requested for job %s but is not implemented yet", job_id)
-    jobs.update(
+    jobs.update_if_status(
         job_id,
+        {"running"},
         ai="failed",
         ai_error="AI enrichment is not available in this build.",
         ai_model_id=model_id,
