@@ -866,3 +866,30 @@ class TestRuleKeyEmptyStem:
         buckets = _by_status(result)
         assert buckets["Persisting"] == []
         assert len(buckets["Resolved"]) == 1 and len(buckets["New"]) == 1
+
+
+class TestDeterministicCoverageSpelling:
+    """Two spellings of one host (or one STIG edition) share a key; the
+    spelling shown on the report is the first one indexed and must not
+    depend on hash seed or insertion order, or two identical runs could
+    print different host names."""
+
+    def test_display_spelling_does_not_depend_on_insertion_order(self):
+        base = [
+            ("Server01", "Win2022 STIG"),
+            ("SERVER01", "Win2022 STIG"),
+            ("host-b", "Edge STIG SCAP Benchmark"),
+            ("HOST-B", "Edge STIG Manual"),
+        ]
+        curr = [("SERVER01", "Win2022 STIG")]
+        forward = compute_delta([], [], baseline_coverage=base, current_coverage=curr)
+        backward = compute_delta(
+            [], [], baseline_coverage=list(reversed(base)), current_coverage=curr
+        )
+        assert forward.common_hosts == backward.common_hosts
+        assert forward.only_baseline_hosts == backward.only_baseline_hosts
+        assert forward.not_rescanned_pairs == backward.not_rescanned_pairs
+        assert forward.newly_scanned_pairs == backward.newly_scanned_pairs
+        # Sorted order, so the spelling is also predictable.
+        assert forward.common_hosts == {"SERVER01"}
+        assert forward.not_rescanned_pairs == {("HOST-B", "Edge STIG Manual")}

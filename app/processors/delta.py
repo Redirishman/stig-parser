@@ -315,9 +315,13 @@ def _blank_vuln_rate(findings: list[Finding]) -> float:
 def _index_coverage(
     coverage: Iterable[Pair], raw_host: dict[str, str]
 ) -> dict[tuple[str, str], Pair]:
-    """Map normalised pair key -> first-seen raw pair; record raw hostnames."""
+    """Map normalised pair key -> first-seen raw pair; record raw hostnames.
+
+    Iterates in sorted order so the spelling kept for display is the same
+    on every run, whatever the set's hash seed or insertion order.
+    """
     indexed: dict[tuple[str, str], Pair] = {}
-    for server, stig_title in coverage:
+    for server, stig_title in sorted(coverage):
         pk = _pair_key(server, stig_title)
         indexed.setdefault(pk, (server, stig_title))
         raw_host.setdefault(pk[0], server)
