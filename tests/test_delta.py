@@ -644,12 +644,12 @@ class TestWarningsField:
 
 
 class TestBlankStigTitleCoverage:
-    def test_blank_stig_title_pairs_warn_that_coverage_is_per_host(self):
+    def test_blank_stig_title_pairs_warn_and_name_the_host(self):
         # A scan that could not be matched to a benchmark has stig_title "",
         # so every such STIG on a host shares ONE coverage pair — a STIG not
-        # re-scanned there can no longer be told apart from one fully
-        # remediated. That cannot be fixed without the benchmark, but it
-        # must not be silent: the operator is told to supply --benchmarks.
+        # re-scanned there cannot be told apart from one fully remediated.
+        # The delta fails closed (see TestBlankStigTitleFailsClosed) and
+        # the operator is told to supply --benchmarks.
         base = [_finding("V-1", "HOST-A", stig_title="")]
         curr = [_finding("V-1", "HOST-A", stig_title="")]
         result = compute_delta(
@@ -660,6 +660,22 @@ class TestBlankStigTitleCoverage:
             for w in result.warnings
         ), result.warnings
 
+    def test_blank_title_warning_says_findings_are_tagged_not_rescanned(self):
+        # The warning must say what the report did about it, not hint that
+        # a Resolved count "may" be wrong.
+        base = [_finding("V-1", "HOST-A", stig_title="")]
+        curr = [_finding("V-1", "HOST-A", stig_title="")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        assert any(
+            "cannot be verified as re-scanned" in w
+            and "Not re-scanned / Newly scanned" in w
+            and "--benchmarks for both sets" in w
+            and "HOST-A" in w
+            for w in result.warnings
+        ), result.warnings
+
     def test_titled_pairs_do_not_warn(self):
         base = [_finding("V-1", "HOST-A")]
         curr = [_finding("V-1", "HOST-A")]
@@ -667,3 +683,74 @@ class TestBlankStigTitleCoverage:
             base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
         )
         assert result.warnings == []
+
+
+class TestBlankStigTitleFailsClosed:
+    """R2-9: a scan that matched no benchmark has no STIG title, so a
+    finding on it cannot be verified as re-scanned. Leftover baseline
+    findings on such a pair are Not re-scanned (never Resolved) and leftover
+    current findings are Newly scanned (never New); matched pairs stay
+    Persisting. Before this, a blank pair present on both sides made every
+    dropped finding Resolved — a false remediation claim."""
+
+    def test_untitled_both_sides_dropped_finding_is_not_resolved(self):
+        base = [
+            _finding("V-1", "HOST-A", stig_title=""),
+            _finding("V-2", "HOST-A", stig_title=""),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title="")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
+        assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
+
+    def test_untitled_both_sides_added_finding_is_not_new(self):
+        base = [_finding("V-1", "HOST-A", stig_title="")]
+        curr = [
+            _finding("V-1", "HOST-A", stig_title=""),
+            _finding("V-3", "HOST-A", stig_title=""),
+        ]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["New"] == []
+        assert [f.vuln_id for f in buckets["Newly scanned"]] == ["V-3"]
+        assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]
+
+    def test_untitled_both_sides_same_findings_all_persisting(self):
+        base = [
+            _finding("V-1", "HOST-A", stig_title=""),
+            _finding("V-2", "HOST-A", stig_title=""),
+        ]
+        curr = [
+            _finding("V-1", "HOST-A", stig_title=""),
+            _finding("V-2", "HOST-A", stig_title=""),
+        ]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert sorted(f.vuln_id for f in buckets["Persisting"]) == ["V-1", "V-2"]
+        assert len(result.findings) == 2
+
+    def test_untitled_baseline_vs_titled_current_leftovers_not_resolved(self):
+        # --benchmarks supplied for the current run only: the baseline pair
+        # is (HOST-A, "") and the current pair is (HOST-A, "Win2022 STIG").
+        # V-1 still matches (identity is host + vuln_id); the dropped V-2
+        # cannot be shown re-scanned and must not be Resolved.
+        base = [
+            _finding("V-1", "HOST-A", stig_title=""),
+            _finding("V-2", "HOST-A", stig_title=""),
+        ]
+        curr = [_finding("V-1", "HOST-A", stig_title="Win2022 STIG")]
+        result = compute_delta(
+            base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
+        )
+        buckets = _by_status(result)
+        assert buckets["Resolved"] == []
+        assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
+        assert [f.vuln_id for f in buckets["Persisting"]] == ["V-1"]

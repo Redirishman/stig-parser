@@ -303,6 +303,9 @@ class TestDeltaEndToEnd:
         SV-254239 goes fail -> pass (drops out of the current findings, so it
         is inferred Resolved); SV-254240 goes pass -> fail (New); the three
         remaining actionable rules are unchanged (Persisting).
+
+        The benchmark is supplied so the STIG is titled: a scan that matched
+        no benchmark fails closed (R2-9) and can never be Resolved or New.
         """
         baseline = FIXTURES / "scc_results.xml"
         # Anchor each edit to its rule-result element so the two status
@@ -328,6 +331,7 @@ class TestDeltaEndToEnd:
             "delta",
             "--baseline", str(baseline),
             "--current", str(current),
+            "--benchmarks", str(FIXTURES / "sample_benchmark.xml"),
             "--output", str(out),
         ])
         assert rc == 0
@@ -399,6 +403,7 @@ class TestDeltaEndToEnd:
         100% remediation is the operator's best possible outcome. The clean
         scan still records which host/STIG it covered (ParseResult.coverage),
         so compute_delta can tell "fully remediated" from "not re-scanned".
+        The benchmark is supplied so the STIG is titled (R2-9).
         """
         baseline = FIXTURES / "scc_results.xml"
         clean = tmp_path / "clean.xml"
@@ -416,6 +421,7 @@ class TestDeltaEndToEnd:
                 "delta",
                 "--baseline", str(baseline),
                 "--current", str(clean),
+                "--benchmarks", str(FIXTURES / "sample_benchmark.xml"),
                 "--output", str(out),
             ])
         assert rc == 0, "a fully remediated current scan must not fail the run"
@@ -431,7 +437,8 @@ class TestDeltaEndToEnd:
     def test_fully_clean_baseline_still_reports(self, tmp_path):
         """A baseline with zero actionable findings is legitimate too.
 
-        (Clean baseline, findings appear later: every current finding is New.)
+        (Clean baseline, findings appear later: every current finding is New.
+        The benchmark is supplied so the STIG is titled, R2-9.)
         """
         current = FIXTURES / "scc_results.xml"
         clean = tmp_path / "clean.xml"
@@ -448,6 +455,7 @@ class TestDeltaEndToEnd:
             "delta",
             "--baseline", str(clean),
             "--current", str(current),
+            "--benchmarks", str(FIXTURES / "sample_benchmark.xml"),
             "--output", str(out),
         ])
         assert rc == 0
@@ -476,7 +484,10 @@ class TestDeltaEndToEnd:
             )
 
     def test_partially_remediated_scan_tags_resolved(self, tmp_path, caplog):
-        """Remediated findings on a still-reporting host are tagged Resolved."""
+        """Remediated findings on a still-reporting host are tagged Resolved.
+
+        The benchmark is supplied so the STIG is titled (R2-9).
+        """
         baseline = FIXTURES / "scc_results.xml"
         # Everything passes except SV-254239, so the host still appears in the
         # current run and its four other findings are inferred Resolved.
@@ -499,6 +510,7 @@ class TestDeltaEndToEnd:
                 "delta",
                 "--baseline", str(baseline),
                 "--current", str(current),
+                "--benchmarks", str(FIXTURES / "sample_benchmark.xml"),
                 "--output", str(out),
             ])
         assert rc == 0
@@ -833,6 +845,43 @@ class TestZeroRuleResultScanEndToEnd:
         ), [r.message for r in caplog.records]
         listed = _warning_rows(load_workbook(out)["Summary"])
         assert any(expected in w and "--benchmarks" in w for w in listed), listed
+
+
+class TestUntitledScanFailsClosedEndToEnd:
+    """Without --benchmarks the fixture scan matches no benchmark and has no
+    STIG title, so a dropped finding cannot be shown re-scanned: it is Not
+    re-scanned, never Resolved (R2-9), and the operator is told why in the
+    log and on the workbook."""
+
+    def test_dropped_finding_without_benchmarks_is_not_resolved(self, tmp_path, caplog):
+        baseline = FIXTURES / "scc_results.xml"
+        text = baseline.read_text(encoding="utf-8")
+        # SV-254239 is the fixture's only "fail"; the other actionable rules
+        # are notchecked/error/unknown. Remediating it drops it from current.
+        assert text.count("<cdf:result>fail</cdf:result>") == 1
+        current = tmp_path / "current.xml"
+        current.write_text(
+            text.replace("<cdf:result>fail</cdf:result>", "<cdf:result>pass</cdf:result>", 1),
+            encoding="utf-8",
+        )
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(baseline),
+                "--current", str(current),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        rows = _delta_rows(out)
+        assert rows["xccdf_mil.disa.stig_rule_SV-254239r945408_rule"] == "Not re-scanned"
+        assert set(rows.values()) == {"Persisting", "Not re-scanned"}
+        assert any(
+            "cannot be verified as re-scanned" in r.message and "WIN-SERVER-01" in r.message
+            for r in caplog.records if r.name == "app.cli"
+        ), [r.message for r in caplog.records]
+        listed = _warning_rows(load_workbook(out)["Summary"])
+        assert any("cannot be verified as re-scanned" in w for w in listed), listed
 
 
 class TestReportBackCompatEndToEnd:

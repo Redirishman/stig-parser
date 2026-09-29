@@ -178,6 +178,7 @@ in the template. Deferred to a separate commit after CLI ships.
 | R2-6 | Every coverage warning (no host overlap, hosts or STIGs not re-scanned, asymmetric Vuln-ID coverage, duplicates) is appended to `DeltaResult.warnings`, so it reaches the workbook, not only the CLI log. |
 | R2-7 | `allow_empty` relaxes only the zero-*actionable* case. Zero rule results still raises `PipelineError`. |
 | R2-8 | Rows sort by normalised host key. |
+| R2-9 | **Fail closed on unverifiable coverage** (2026-09-28 review). (a) A scan file with zero rule results is not a scan: `scan_coverage` skips it and `parse_stage` warns by name (`<file>: 0 rule results — not counted as a scan; if this file is a benchmark, pass it with --benchmarks`); the delta CLI forwards parse-stage warnings, prefixed with their side, into `DeltaResult.warnings` so the workbook carries them. (b) A scan that matched no benchmark yields the pair `(host, "")`. A finding whose STIG key is blank is never New or Resolved, even when the blank pair is in both coverages: leftover baseline findings are **Not re-scanned**, leftover current findings **Newly scanned**; matched pairs stay Persisting. The blank-title warning says so and recommends `--benchmarks` for both sets. |
 
 **Recorded as built (undocumented until now):** two-pass identity match with host-name normalisation; Baseline Status / Current Status split; `export()` shares the findings-sheet writer with `export_delta()` and its output is unchanged.
 

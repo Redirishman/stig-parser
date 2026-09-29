@@ -343,6 +343,9 @@ def compute_delta(
       only if its (host, STIG) pair is in the current coverage, otherwise
       **Not re-scanned**. A leftover current finding is **New** only if its
       pair is in the baseline coverage, otherwise **Newly scanned**.
+    - a blank STIG title (scan matched no benchmark) can never verify a
+      re-scan: leftovers on such a pair are always **Not re-scanned** /
+      **Newly scanned**, whichever side the pair is on.
 
     Host matching is case/whitespace insensitive (``_host_key``) and STIG
     matching is edition-neutral (``_stig_key``); the host and pair sets on
@@ -388,9 +391,14 @@ def compute_delta(
     for b, c in pairs:
         result.findings.append(_tag(c, _PERSISTING, b.status, c.status))
 
+    # A blank STIG key means the scan matched no benchmark, so a finding on
+    # it cannot be shown to have been re-scanned: it fails closed as Not
+    # re-scanned / Newly scanned even when the blank pair is on both sides
+    # (R2-9). Matched pairs above are unaffected.
     resolved: list[Finding] = []
     for f in leftover_base:
-        if _pair_key(f.server, f.stig_title) in curr_pairs:
+        pk = _pair_key(f.server, f.stig_title)
+        if pk[1] and pk in curr_pairs:
             resolved.append(f)
             result.findings.append(_tag(f, _RESOLVED, f.status, ""))
         else:
@@ -398,7 +406,8 @@ def compute_delta(
 
     new_common: list[Finding] = []
     for f in leftover_curr:
-        if _pair_key(f.server, f.stig_title) in base_pairs:
+        pk = _pair_key(f.server, f.stig_title)
+        if pk[1] and pk in base_pairs:
             new_common.append(f)
             result.findings.append(_tag(f, _NEW, "", f.status))
         else:
@@ -453,8 +462,8 @@ def compute_delta(
         warnings.append(msg)
     # A scan that could not be matched to a benchmark has no STIG title, so
     # every such STIG on a host shares one coverage pair and a STIG not
-    # re-scanned there cannot be told apart from one fully remediated. That
-    # needs the benchmark to fix; until then it must not be silent.
+    # re-scanned there cannot be told apart from one fully remediated. The
+    # findings fail closed (above); the operator is told why and how to fix it.
     blank_title_hosts = sorted(
         {server for server, title in (*base_pairs.values(), *curr_pairs.values())
          if not title.strip()},
@@ -464,10 +473,9 @@ def compute_delta(
         n = len(blank_title_hosts)
         msg = (
             f"{n} host(s) have scans with no STIG title (the scan could not be "
-            "matched to a benchmark), so coverage there is tracked per host, "
-            "not per STIG — a STIG not re-scanned on such a host may be counted "
-            "as Resolved. Supply --benchmarks for both sets: "
-            + ", ".join(blank_title_hosts)
+            "matched to a benchmark), so their findings cannot be verified as "
+            "re-scanned and are tagged Not re-scanned / Newly scanned; supply "
+            "--benchmarks for both sets: " + ", ".join(blank_title_hosts)
         )
         log.warning(msg)
         warnings.append(msg)

@@ -182,10 +182,12 @@ stripped; a blank Rule ID is never matched) — Vuln ID is stable across DISA
 benchmark revisions where Rule ID is not. If the two runs have different
 benchmark coverage (e.g. `--benchmarks` supplied for only one of them), the
 tool warns that Resolved/New counts may be unreliable. A scan that could not
-be matched to a benchmark has no STIG title, so coverage on that host is
-tracked per host rather than per STIG; the tool warns and recommends
-`--benchmarks` for both sets. Every warning appears both in the terminal and
-in the workbook's Summary sheet.
+be matched to a benchmark has no STIG title, so its findings cannot be
+verified as re-scanned: they are tagged `Not re-scanned` / `Newly scanned`
+rather than `Resolved` / `New`, and the tool warns and recommends
+`--benchmarks` for both sets. A results file with no rule results at all is
+never counted as a scan and is named in a warning. Every warning appears both
+in the terminal and in the workbook's Summary sheet.
 
 ---
 
