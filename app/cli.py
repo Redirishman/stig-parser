@@ -323,10 +323,15 @@ def _run_delta(args: argparse.Namespace) -> int:
         # Parse-stage warnings (unparseable files, files with no rule
         # results) are prefixed with their side so the reader knows which
         # scan set they describe; they are echoed here and, below, added to
-        # the delta warnings so the workbook carries them too.
+        # the delta warnings so the workbook carries them too. A message
+        # identical on both sides (a benchmark or ZIP problem, raised once
+        # per parse_stage call) is not side-specific: it is kept once under
+        # "Both scan sets:" rather than twice with different prefixes.
+        shared = dict.fromkeys(w for w in base_res.warnings if w in set(curr_res.warnings))
         parse_warnings = [
-            *(f"Baseline scan set: {w}" for w in base_res.warnings),
-            *(f"Current scan set: {w}" for w in curr_res.warnings),
+            *(f"Both scan sets: {w}" for w in shared),
+            *(f"Baseline scan set: {w}" for w in base_res.warnings if w not in shared),
+            *(f"Current scan set: {w}" for w in curr_res.warnings if w not in shared),
         ]
         for w in parse_warnings:
             log.warning(w)
@@ -344,11 +349,10 @@ def _run_delta(args: argparse.Namespace) -> int:
 
         # Every delta warning — duplicate findings, asymmetric benchmark
         # coverage, hosts/STIGs not re-scanned or newly scanned, no host
-        # overlap — lives on delta.warnings so the workbook carries it too;
-        # here it is only echoed to the log. The parse-stage warnings are
-        # prepended so the workbook's Warnings block is complete.
-        for w in delta.warnings:
-            log.warning(w)
+        # overlap — is already logged by compute_delta under its own logger
+        # and lives on delta.warnings so the workbook carries it too; it is
+        # not echoed again here. The parse-stage warnings are prepended so
+        # the workbook's Warnings block is complete.
         delta.warnings[:0] = parse_warnings
 
         counts = Counter(f.delta_status for f in delta.findings)

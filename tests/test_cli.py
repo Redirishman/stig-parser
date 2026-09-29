@@ -361,8 +361,10 @@ class TestDeltaEndToEnd:
         vuln_ids = {ws.cell(row=r, column=3).value for r in range(2, ws.max_row + 1)}
         assert vuln_ids and all(v and v.startswith("V-") for v in vuln_ids)
 
-    def test_delta_warnings_are_logged(self, tmp_path, caplog):
-        """compute_delta's warnings must reach the operator via the CLI log.
+    def test_delta_warnings_are_logged_exactly_once(self, tmp_path, caplog):
+        """compute_delta's warnings must reach the operator via the CLI run's
+        log - once. compute_delta logs each warning under its own logger;
+        the CLI must not echo the same text a second time under "app.cli".
 
         The current set gains a rule that sample_benchmark.xml does not
         define, so its Vuln-ID coverage differs from the baseline's — the
@@ -382,7 +384,7 @@ class TestDeltaEndToEnd:
             {'  <cdf:score system="urn:xccdf:scoring:default"': extra_rule},
         )
         out = tmp_path / "delta.xlsx"
-        with caplog.at_level(logging.WARNING, logger="app.cli"):
+        with caplog.at_level(logging.WARNING):
             rc = main([
                 "delta",
                 "--baseline", str(baseline),
@@ -391,10 +393,39 @@ class TestDeltaEndToEnd:
                 "--output", str(out),
             ])
         assert rc == 0
-        assert any(
-            r.name == "app.cli" and "different Vuln-ID coverage" in r.message
-            for r in caplog.records
-        ), "delta warnings were not surfaced by the CLI"
+        hits = [
+            (r.name, r.message) for r in caplog.records
+            if "different Vuln-ID coverage" in r.message
+        ]
+        assert len(hits) == 1, f"delta warning must be logged exactly once: {hits}"
+
+    def test_parse_warning_shared_by_both_sides_is_logged_once(self, tmp_path, caplog):
+        """A benchmark that fails to parse is reported by parse_stage once
+        per side with an identical message. That is not side-specific, so the
+        CLI keeps ONE copy, prefixed "Both scan sets:", in the log and on the
+        workbook - never the same text twice under "Baseline scan set:" and
+        "Current scan set:"."""
+        good = FIXTURES / "scc_results.xml"
+        bad_bench = tmp_path / "bad_bench.xml"
+        bad_bench.write_text("<Benchmark><unclosed>", encoding="utf-8")
+        out = tmp_path / "delta.xlsx"
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            rc = main([
+                "delta",
+                "--baseline", str(good),
+                "--current", str(good),
+                "--benchmarks", str(bad_bench), str(FIXTURES / "sample_benchmark.xml"),
+                "--output", str(out),
+            ])
+        assert rc == 0
+        hits = [
+            r.message for r in caplog.records
+            if r.name == "app.cli" and "bad_bench.xml" in r.message
+        ]
+        assert len(hits) == 1, f"shared parse warning must be logged once: {hits}"
+        assert hits[0].startswith("Both scan sets: "), hits
+        listed = [w for w in _warning_rows(load_workbook(out)["Summary"]) if "bad_bench.xml" in w]
+        assert len(listed) == 1 and listed[0].startswith("Both scan sets: "), listed
 
     def test_fully_remediated_current_scan_is_all_resolved(self, tmp_path, caplog):
         """A current scan with zero actionable findings must not abort, and
@@ -878,7 +909,7 @@ class TestUntitledScanFailsClosedEndToEnd:
         assert set(rows.values()) == {"Persisting", "Not re-scanned"}
         assert any(
             "cannot be verified as re-scanned" in r.message and "WIN-SERVER-01" in r.message
-            for r in caplog.records if r.name == "app.cli"
+            for r in caplog.records
         ), [r.message for r in caplog.records]
         listed = _warning_rows(load_workbook(out)["Summary"])
         assert any("cannot be verified as re-scanned" in w for w in listed), listed
