@@ -108,6 +108,25 @@ class TestDeltaArgs:
         # called "delta" is still a legal --results value.
         assert _normalize_argv(["--results", "delta"]) == ["report", "--results", "delta"]
 
+    def test_subcommand_after_a_one_value_flag_is_rejected(self, capsys):
+        # --output takes exactly one value; the scan resumes after it.
+        with pytest.raises(SystemExit) as exc:
+            _normalize_argv(["--output", "x.xlsx", "delta", "--baseline", "a.xml"])
+        assert exc.value.code == 2
+        assert "'delta' must be the first argument" in capsys.readouterr().err
+
+    def test_subcommand_after_a_multi_value_flag_is_rejected(self, capsys):
+        # --results consumes every following non-flag token as a path; the
+        # next flag ends that run, so a subcommand after it is misplaced.
+        with pytest.raises(SystemExit) as exc:
+            _normalize_argv(["--results", "a.xml", "b.xml", "--verbose", "delta"])
+        assert exc.value.code == 2
+        assert "'delta' must be the first argument" in capsys.readouterr().err
+
+    def test_every_value_of_a_multi_value_flag_is_skipped(self):
+        argv = ["--results", "delta", "report", "--output", "delta"]
+        assert _normalize_argv(argv) == ["report", *argv]
+
     def test_delta_requires_baseline_and_current(self):
         parser = _build_parser()
         with pytest.raises(SystemExit):

@@ -48,7 +48,10 @@ def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> 
 
 _SUBCOMMANDS = ("report", "delta")
 # Options whose values may themselves be paths named like a subcommand.
-_VALUE_OPTS = ("--results", "--benchmarks", "--baseline", "--current", "--output")
+# A one-value option consumes exactly the next token; a multi-value option
+# (nargs "+" / "*") consumes every following token up to the next flag.
+_ONE_VALUE_OPTS = ("--output",)
+_MULTI_VALUE_OPTS = ("--results", "--benchmarks", "--baseline", "--current")
 
 
 def _add_common_flags(p: argparse.ArgumentParser) -> None:
@@ -163,14 +166,24 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 def _misplaced_subcommand(argv: list[str]) -> str | None:
     """Return a subcommand name typed after another argument, if any.
 
-    Scanning stops at the first value-taking option: everything after one may
-    legitimately be a file or directory named ``report`` or ``delta``.
+    The values of a value-taking option are skipped rather than ending the
+    scan: a file or directory named ``report`` or ``delta`` is a legal
+    ``--results`` value, but ``--output x.xlsx delta ...`` is a misplaced
+    subcommand and must not be silently run as ``report``.
     """
-    for tok in argv:
-        if tok in _VALUE_OPTS:
-            return None
-        if tok in _SUBCOMMANDS:
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _ONE_VALUE_OPTS:
+            i += 2
+        elif tok in _MULTI_VALUE_OPTS:
+            i += 1
+            while i < len(argv) and not argv[i].startswith("-"):
+                i += 1
+        elif tok in _SUBCOMMANDS:
             return tok
+        else:
+            i += 1
     return None
 
 
