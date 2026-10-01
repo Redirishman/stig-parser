@@ -137,6 +137,9 @@
   function updateProcessBtn() {
     const hasResults = resultsInput.files && resultsInput.files.length > 0;
     processBtn.disabled = !hasResults;
+    // Explain the disabled state; hide the hint once a results file is present.
+    const hint = document.getElementById('process-hint');
+    if (hint) hint.hidden = hasResults;
   }
 
   // ------------------------------------------------------------------
@@ -368,7 +371,7 @@
     benchmarksInput.value = '';
     showZoneNotice(resultsZoneNotice, '');
     showZoneNotice(benchmarksZoneNotice, '');
-    processBtn.disabled = true;
+    updateProcessBtn(); // files just cleared → disabled + hint reshown
   }
 
   // Soft reset after an error: keep the user's file selections intact.
