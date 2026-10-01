@@ -16,8 +16,9 @@ from app.parsers.benchmark_parser import BenchmarkParser
 from app.parsers.cklb_parser import CKLBParser
 from app.parsers.nessus_parser import NessusComplianceParser
 from app.parsers.xccdf_parser import XCCDFResultsParser
+from app.processors.delta import DeltaResult
 from app.processors.filter import filter_findings
-from app.processors.matcher import match_results_to_benchmarks
+from app.processors.matcher import match_results_to_benchmarks, scan_coverage
 from app.utils.zip_extract import expand_benchmark_paths
 
 
@@ -25,7 +26,15 @@ class PipelineError(Exception):
     """Raised when the pipeline cannot produce actionable findings.
 
     The message is user-safe and intended for display in the UI / CLI.
+    ``warnings`` carries the per-file warnings :func:`parse_stage` had
+    collected before it gave up — they are the diagnosis ("x.cklb: 0 rule
+    results"), so a caller logs them ahead of the error instead of losing
+    them with the ``ParseResult`` that was never built.
     """
+
+    def __init__(self, message: str, warnings: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.warnings: list[str] = list(warnings or [])
 
 
 @dataclass
@@ -34,6 +43,10 @@ class ParseResult:
     findings: list[Finding]
     warnings: list[str]
     source_file_count: int
+    # Every (server, stig_title) pair the scan set covered, built BEFORE the
+    # actionable filter and including scans with nothing left open. The
+    # delta report uses it to tell "fully remediated" from "not re-scanned".
+    coverage: set[tuple[str, str]]
 
 
 def parse_stage(
@@ -42,6 +55,7 @@ def parse_stage(
     extract_dir: Path,
     *,
     cancel_check: Callable[[], None] | None = None,
+    allow_empty: bool = False,
 ) -> ParseResult:
     """Parse results + benchmarks, match, and filter to actionable findings.
 
@@ -49,6 +63,13 @@ def parse_stage(
     work; it may raise to abort (the Flask worker uses this for cancellation).
     Raises :class:`PipelineError` (user-safe message) when no actionable
     findings can be produced.
+
+    ``allow_empty`` relaxes ONLY the zero-actionable-findings case: a scan set
+    where every rule passed returns an empty ``ParseResult`` instead of
+    raising. Delta runs need this — a fully remediated scan set is a
+    legitimate (and desirable) input, not a failure. A results set where
+    nothing could be parsed at all, or that parsed but contains zero rule
+    results, still raises regardless.
     """
 
     def _check() -> None:
@@ -62,6 +83,12 @@ def parse_stage(
     # .nessus compliance scans (Tenable XML). Everything else goes through
     # the XCCDF pipeline.
     _SELF_CONTAINED = {".cklb": CKLBParser, ".nessus": NessusComplianceParser}
+    # Why a self-contained file can parse cleanly yet hold zero rows.
+    _ZERO_ROW_HINT = {
+        ".cklb": "the checklist has no rules",
+        ".nessus": "no Policy Compliance items (a vulnerability scan is not a "
+                   "compliance scan)",
+    }
     sc_paths = [p for p in results_paths if p.suffix.lower() in _SELF_CONTAINED]
     xccdf_paths = [p for p in results_paths if p.suffix.lower() not in _SELF_CONTAINED]
 
@@ -106,41 +133,66 @@ def parse_stage(
         else:
             sc_file_count += 1
             sc_findings.extend(parsed)
+            if not parsed:
+                # Zero rows contribute no coverage pair (built from rows,
+                # below): like a zero-rule-result XCCDF file this is not a
+                # scan, and the operator must be told which file, by name.
+                hint = _ZERO_ROW_HINT[path.suffix.lower()]
+                warnings.append(
+                    f"{path.name}: 0 rule results — not counted as a scan; {hint}"
+                )
 
     if not scan_results and sc_file_count == 0:
-        raise PipelineError("No valid results files could be parsed.")
+        raise PipelineError("No valid results files could be parsed.", warnings)
 
     _check()
+    # Coverage comes from every parsed row (self-contained formats emit all
+    # statuses) plus one pair per XCCDF scan file — captured BEFORE the
+    # actionable filter so a clean scan still records what it covered.
+    coverage = {(f.server, f.stig_title) for f in sc_findings}
+    coverage |= scan_coverage(scan_results, benchmarks)
+    # scan_coverage skips a file with no rule results (it is not a scan and
+    # must never count as a re-scan); say so per file, so a benchmark that
+    # was handed in as results is caught rather than silently ignored.
+    for sr in scan_results:
+        if not sr.rule_results:
+            warnings.append(
+                f"{sr.source_file}: 0 rule results — not counted as a scan; "
+                "if this file is a benchmark, pass it with --benchmarks"
+            )
+
     findings = match_results_to_benchmarks(scan_results, benchmarks)
     findings.extend(sc_findings)
     findings = filter_findings(findings)
 
-    if not findings:
-        total_rules = sum(len(s.rule_results) for s in scan_results)
-        total_rules += len(sc_findings)
-        if total_rules == 0:
-            msg = (
-                f"No rule results were found in any of the "
-                f"{len(scan_results) + sc_file_count} results file(s). The "
-                f"files may not be scan results (XCCDF, CKLB, or .nessus), "
-                f"or may use an unrecognised structure. Check the warnings "
-                f"for details."
-            )
-        else:
-            msg = (
-                f"Parsed {total_rules} rule result(s) across "
-                f"{len(scan_results) + sc_file_count} file(s), but none had "
-                f"an actionable status (Open / Not Reviewed / Error / "
-                f"Unknown). Either every rule passed, or the results were "
-                f"not matched to the supplied STIG benchmarks. Check the "
-                f"warnings."
-            )
-        raise PipelineError(msg)
+    total_files = len(scan_results) + sc_file_count
+    total_rules = sum(len(s.rule_results) for s in scan_results) + len(sc_findings)
+    if total_rules == 0:
+        # Well-formed files with no rule results at all are a wrong input
+        # (e.g. a benchmark handed in as results), never a clean scan —
+        # allow_empty does not apply.
+        raise PipelineError(
+            f"No rule results were found in any of the {total_files} results "
+            f"file(s). The files may not be scan results (XCCDF, CKLB, or "
+            f".nessus), or may use an unrecognised structure. Check the "
+            f"warnings for details.",
+            warnings,
+        )
+    if not findings and not allow_empty:
+        raise PipelineError(
+            f"Parsed {total_rules} rule result(s) across {total_files} "
+            f"file(s), but none had an actionable status (Open / Not Reviewed "
+            f"/ Error / Unknown). Either every rule passed, or the results "
+            f"were not matched to the supplied STIG benchmarks. Check the "
+            f"warnings.",
+            warnings,
+        )
 
     return ParseResult(
         findings=findings,
         warnings=warnings,
-        source_file_count=len(scan_results) + sc_file_count,
+        source_file_count=total_files,
+        coverage=coverage,
     )
 
 
@@ -169,3 +221,14 @@ def default_output_name() -> str:
     """Timestamped default output filename."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return f"stig_findings_{ts}.xlsx"
+
+
+def export_delta_stage(delta: DeltaResult, output_path: Path) -> None:
+    """Write a delta result to an Excel workbook at ``output_path``."""
+    ExcelExporter().export_delta(delta, output_path)
+
+
+def default_delta_output_name() -> str:
+    """Timestamped default delta output filename."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"stig_delta_{ts}.xlsx"

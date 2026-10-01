@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.parsers.base import Benchmark, BenchmarkRule, RuleResult, ScanResult
-from app.processors.matcher import match_results_to_benchmarks
+from app.processors.matcher import match_results_to_benchmarks, scan_coverage
 
 
 def _make_rule(rule_id: str, vuln_id: str = "V-000001", severity: str = "CAT I") -> BenchmarkRule:
@@ -210,3 +210,54 @@ class TestDuplicateTargets:
                            rule_results=[RuleResult(RULE_ID, "fail")])
         findings = match_results_to_benchmarks([scan1, scan2], [bm])
         assert len(findings) == 2
+
+
+class TestScanCoverage:
+    """scan_coverage(): one (hostname, STIG title) pair per scan file, whether
+    or not the scan produced any actionable finding. This is what lets the
+    delta report tell "fully remediated" apart from "not re-scanned"."""
+
+    def test_all_pass_scan_yields_a_pair_and_zero_findings(self):
+        rule = _make_rule(RULE_ID)
+        bm = _make_benchmark(BENCHMARK_ID, [rule])
+        scan = _make_scan(
+            "SERVER01",
+            benchmark_id=BENCHMARK_ID,
+            rule_results=[RuleResult(RULE_ID, "pass"), RuleResult("SV-2r1_rule", "pass")],
+        )
+        assert match_results_to_benchmarks([scan], [bm]) == []
+        assert scan_coverage([scan], [bm]) == {("SERVER01", bm.title)}
+
+    def test_unmatched_benchmark_yields_blank_title(self):
+        scan = _make_scan(
+            "SERVER01",
+            benchmark_id="xccdf_other_benchmark",
+            rule_results=[RuleResult(RULE_ID, "fail")],
+        )
+        assert scan_coverage([scan], []) == {("SERVER01", "")}
+
+    def test_one_pair_per_scan_file(self):
+        rule = _make_rule(RULE_ID)
+        bm = _make_benchmark(BENCHMARK_ID, [rule])
+        passed = [RuleResult(RULE_ID, "pass")]
+        scans = [
+            _make_scan("SERVER01", benchmark_id=BENCHMARK_ID, rule_results=passed),
+            _make_scan("SERVER02", benchmark_id=BENCHMARK_ID, rule_results=passed),
+            _make_scan("SERVER01", benchmark_id="xccdf_other_benchmark", rule_results=passed),
+        ]
+        assert scan_coverage(scans, [bm]) == {
+            ("SERVER01", bm.title),
+            ("SERVER02", bm.title),
+            ("SERVER01", ""),
+        }
+
+    def test_zero_rule_result_scan_yields_no_pair(self):
+        # A file with no <rule-result> at all (a benchmark handed in as
+        # results, or a scan that never ran) covers nothing. Counting it
+        # would let every baseline finding on that host/STIG read as
+        # Resolved in a delta — the one thing the report must never do.
+        rule = _make_rule(RULE_ID)
+        bm = _make_benchmark(BENCHMARK_ID, [rule])
+        empty = _make_scan("SERVER01", benchmark_id=BENCHMARK_ID, rule_results=[])
+        assert scan_coverage([empty], [bm]) == set()
+        assert scan_coverage([empty], []) == set()

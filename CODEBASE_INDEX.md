@@ -194,10 +194,14 @@ Constants: `_CM_NS`/`_CM`, `_RESULT_MAP` (`FAILED→Open`, `PASSED→Not A Findi
 ### 4.1 `matcher.py`
 `match_results_to_benchmarks(scan_results, benchmarks) -> list[Finding]` — joins each `RuleResult` to its `BenchmarkRule` via parent benchmark; emits only actionable statuses; warns on unmatched benchmarks and unmatched rule ids.
 Helpers: `_normalize_id(raw)` (Path.stem.lower, hrefs only), `_find_benchmark(href, bid, benchmarks)` — 3-tier match (exact id → href stem → substring).
+`scan_coverage(scan_results, benchmarks) -> set[(hostname, title)]` — one `(hostname, STIG title)` pair per XCCDF scan file regardless of its results (title via `_find_benchmark`, `""` when unmatched); feeds `ParseResult.coverage` so a clean scan still records what it covered.
 Constants: `_STATUS_MAP` (`fail→Open`, `notchecked/notselected→Not Reviewed`, `error→Error`, `unknown→Unknown`), `_KEEP_STATUSES`.
 
 ### 4.2 `filter.py`
 `filter_findings(findings) -> list[Finding]` — defensive keep of `Open` / `Not Reviewed` / `Error` / `Unknown` (`_KEEP_STATUSES`).
+
+### 4.3 `delta.py`
+`compute_delta(baseline, current, *, baseline_coverage, current_coverage) -> DeltaResult` — pure, I/O-free baseline-vs-current comparison of two `list[Finding]`. Coverage — the `(server, stig_title)` pairs each run scanned (`ParseResult.coverage`) — is required and never derived from the findings. `DELTA_STATUSES = ("New", "Resolved", "Persisting", "Not re-scanned", "Newly scanned")`. Host sets (`common_hosts`, `only_baseline_hosts`, `only_current_hosts`) come from coverage: a host only in one side is wholly `Not re-scanned` / `Newly scanned`. On common hosts, identity is a two-pass match (`_match_two_pass`): `(host, vuln_id)` first, then `(host, rule stem)` for leftovers (`_rule_stem` strips the `xccdf_*_rule_` prefix and `rNNN_rule` revision; blank rule IDs never match) — tolerates asymmetric `--benchmarks` coverage. A leftover baseline finding is `Resolved` only if its `(host, STIG)` pair is in the current coverage, else `Not re-scanned`; a leftover current finding is `New` only if its pair is in the baseline coverage, else `Newly scanned`. Keys: `_host_key` (case/whitespace-insensitive), `_stig_key` (edition-neutral: drops stig/scap/benchmark/manual/disa/audit tokens, "Security Technical Implementation Guide", `vNrN`), `_pair_key`. `DeltaResult.not_rescanned_pairs` / `newly_scanned_pairs` keep raw spellings. Rows sort by normalised host key. `DeltaResult.warnings` carries every coverage warning (no host overlap, pairs not re-scanned / newly scanned, scans with no STIG title, asymmetric Vuln-ID coverage, duplicates) so it reaches the workbook.
 
 ---
 
@@ -209,7 +213,7 @@ AWS-agnostic. `pipeline.py`, `stages.py`, and `findings_io.py` must not import b
 | Symbol | Kind | Description |
 |---|---|---|
 | `PipelineError` | Exception | User-safe message for UI / CLI |
-| `ParseResult` | dataclass | `findings`, `warnings`, `source_file_count` |
+| `ParseResult` | dataclass | `findings`, `warnings`, `source_file_count`, `coverage` (set of `(server, stig_title)` scanned, built before the actionable filter) |
 | `parse_stage(results_paths, benchmark_paths, extract_dir, *, cancel_check=None)` | fn | Routes `.cklb`/`.nessus` to self-contained parsers (`_SELF_CONTAINED`), rest through XCCDF; expands ZIPs; matches + filters; raises `PipelineError` when no actionable findings, with a diagnostic message |
 | `compute_summary(findings, source_file_count)` | fn | `{files, hosts, findings, cat1, cat2, cat3}` |
 | `export_stage(findings, output_path)` | fn | Delegates to `ExcelExporter` |
@@ -238,7 +242,7 @@ Optional benchmarks: when none supplied, XCCDF result files feed both sides (SCC
 ## 6. Exporters (`app/exporters/excel_exporter.py`)
 
 **Class:** `ExcelExporter.export(findings, output_path) -> Path` — raises `ValueError` on empty list. Builds `Findings` + `Summary` sheets.
-- `_write_findings(ws, findings)` — header row, data rows, severity fill, freeze `A2`, auto-filter `A1:I1`, measured column widths.
+- `_write_findings_sheet(ws, rows, cols, fills)` — shared by `export` and `export_delta`: header row, data rows, fills, freeze `A2`, auto-filter, measured column widths.
 - `_write_summary(ws, findings)` — three COUNTIFS tables + italic footer note.
 - Module utils: `_unique_pairs`, `_unique_values` (order-preserving dedup).
 - **CSV-injection defense:** `_sanitize_cell` prefixes `'` to any value starting with `= + - @ | \t \r` (`_FORMULA_PREFIXES`) — scan text is attacker-controllable.
@@ -246,6 +250,10 @@ Optional benchmarks: when none supplied, XCCDF result files feed both sides (SCC
 **Findings columns (`_FINDINGS_COLS`):** A STIG Title(50) · B Vuln ID(12) · C Rule ID(40) · D Severity(10) · E Status(14) · F Server(30) · G IP Address(18) · H Check Text(80, wrap) · I Fix Text(80, wrap).
 **Severity fills:** CAT I `#FFCCCC` · CAT II `#FFEB9C` · CAT III `#C6EFCE`. Fonts: Arial 10 (bold header).
 **Summary tables:** By Severity (Severity × statuses) · By Server (Server, IP × CAT I/II/III) · By STIG (Title × CAT I/II/III), each with a SUM total; footer disclaims that filtering doesn't update COUNTIFS.
+
+**`export_delta(delta: DeltaResult, output_path) -> Path`** — delta workbook counterpart. Unlike `export`, an all-one-bucket result (every finding New, or every finding Resolved) is valid; only a delta with no findings *and* no host-coverage data raises `ValueError`.
+- **Findings** sheet (`_DELTA_COLS`): Delta(12) · STIG Title(50) · Vuln ID(12) · Rule ID(40) · Severity(10) · Baseline Status(16) · Current Status(16) · Server(30) · IP Address(18) · Check Text(80, wrap) · Fix Text(80, wrap). Delta column color-coded via `_DELTA_FILL`.
+- **Summary** sheet (`_write_delta_summary`): Delta Summary table (every `DELTA_STATUSES` entry × CAT I/II/III + Total, via COUNTIFS/COUNTIF) · Coverage block (hosts compared, then "Host / STIG pairs not re-scanned" and "Host / STIG pairs newly scanned" — one row per pair, host in col B, STIG in col C, both sanitised) · Warnings block (only present when `delta.warnings` is non-empty) · italic footer note: Resolved requires the same host and STIG in the current scan.
 
 ---
 
@@ -295,9 +303,14 @@ State helpers: `_set_job`, `_get_job`, `_job_dir`. Log capture: `_WarningCollect
 
 ## 9. CLI (`app/cli.py`)
 
-`main(argv=None) -> int` — 0 success / 1 error. Routes through `app.core.pipeline`.
-Args: `--results` (required; `.xml`/`.cklb`/`.nessus`, dirs, globs) · `--benchmarks` (optional; `.xml`/`.zip`) · `--output` (default timestamped) · `--verbose`.
-Helpers: `_resolve_paths(args, extensions)` (dir/glob expansion), `_build_parser()`. Console script: `stig-parser = app.cli:main`.
+`main(argv=None) -> int` — 0 success / 1 error. Two subcommands via `argparse` subparsers, `dest="command"`:
+
+- `report` — single-run findings report. Routes through `app.core.pipeline` (`parse_stage` → `export_stage`). Args: `--results` (required; `.xml`/`.cklb`/`.nessus`, dirs, globs) · `--benchmarks` (optional; `.xml`/`.zip`) · `--output` (default `stig_findings_<timestamp>.xlsx`) · `--verbose`.
+- `delta` — diffs a baseline scan set against a current one. Runs `parse_stage` on each side (`allow_empty=True`), then `app.processors.delta.compute_delta` with both sides' `ParseResult.coverage`, then `ExcelExporter.export_delta`; drains `delta.warnings` to the log and prints a summary line counting all five statuses. Args: `--baseline` / `--current` (both required, same formats as `report --results`) · `--benchmarks` (optional, applied to both sides) · `--output` (default `stig_delta_<timestamp>.xlsx`) · `--verbose`.
+
+**Back-compat:** `_normalize_argv()` prepends `report` when the first token isn't a known subcommand or `-h`/`--help`, so the historical flat invocation `stig-parser --results ...` still works.
+
+Helpers: `_resolve_paths(args, extensions)` (dir/glob expansion), `_build_parser()`, `_normalize_argv(argv)`. Console script: `stig-parser = app.cli:main`.
 
 ---
 
@@ -432,10 +445,12 @@ Service `stig-parser`: build local, `5000:5000`, named volume `stig-tmp` at `/tm
 
 ## 15. Documentation & Design Docs
 
-- `README.md` — scanners, output reference, install (pip/Docker), Web+CLI usage, pipeline overview, DISA benchmark source, LibreOffice notes, contributing, roadmap, MIT.
+- `README.md` — scanners, output reference, install (pip/Docker), Web+CLI usage (`report` and `delta` subcommands, back-compat flat form), pipeline overview, DISA benchmark source, LibreOffice notes, contributing, roadmap, MIT.
 - `RESIDUALS.md` — residual-risk / known-limitations notes.
 - `docs/superpowers/specs/2026-07-07-govcloud-replatform-design.md` — GovCloud/Bedrock/React/Terraform re-platform spec (motivates the `app/core/` boundaries + `stages.py`).
 - `docs/superpowers/plans/2026-07-07-backend-async-rearchitecture.md` — async rearchitecture plan.
+- `docs/superpowers/specs/2026-07-20-delta-reporting-design.md` — delta reporting design (locked decisions: baseline-vs-current model, coverage-scoped Resolved, `delta` subcommand).
+- `docs/superpowers/plans/2026-07-20-delta-reporting.md` — delta reporting implementation plan.
 - `LICENSE` — MIT.
 
 ---

@@ -131,3 +131,32 @@ def match_results_to_benchmarks(
             )
 
     return findings
+
+
+def scan_coverage(
+    scan_results: list[ScanResult],
+    benchmarks: list[Benchmark],
+) -> set[tuple[str, str]]:
+    """One ``(hostname, STIG title)`` pair per XCCDF scan file.
+
+    Emitted regardless of the scan's results: a scan where every rule passed
+    still says which host and STIG it covered. The delta report needs that
+    to tell "fully remediated" apart from "not re-scanned" — the actionable
+    finding list alone cannot (see spec Revision 2, R2-1).
+
+    A scan with **no** rule results at all is not a scan (a benchmark handed
+    in as results, or a run that never produced results) and contributes no
+    pair: counting it would let every baseline finding on that host/STIG be
+    reported Resolved (R2-9). ``parse_stage`` warns about each such file.
+
+    The title is resolved through ``_find_benchmark`` exactly as
+    ``match_results_to_benchmarks`` does, so a pair here always matches the
+    ``(server, stig_title)`` of any finding produced from the same scan.
+    """
+    coverage: set[tuple[str, str]] = set()
+    for scan in scan_results:
+        if not scan.rule_results:
+            continue
+        benchmark = _find_benchmark(scan.benchmark_href, scan.benchmark_id, benchmarks)
+        coverage.add((scan.hostname, benchmark.title if benchmark else ""))
+    return coverage
