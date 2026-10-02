@@ -326,13 +326,15 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
                 progress_cb=_progress,
             )
         except PipelineError as exc:
+            # Purge BEFORE reporting: once a poller sees "error" the uploaded
+            # scan files must already be gone.
+            _purge_job_files(job_id)
             _set_job(
                 job_id,
                 status="error",
                 error=str(exc),
                 warnings=list(warnings),
             )
-            _purge_job_files(job_id)
             return
 
         warnings.extend(result.warnings)
@@ -361,6 +363,9 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
         # Never surface internal exception detail to the client (leaks paths,
         # library internals, etc.). The full traceback goes to the server log.
         log.exception("Job %s failed with unhandled exception", job_id)
+        # Same rule as the PipelineError path: files go first, status second.
+        # (This path used to leave the uploads on disk until the orphan sweep.)
+        _purge_job_files(job_id)
         _set_job(
             job_id,
             status="error",
