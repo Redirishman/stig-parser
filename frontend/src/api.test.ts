@@ -148,4 +148,18 @@ describe('api', () => {
 
     await expect(promise).rejects.toThrow(/upload failed/i);
   });
+
+  it('createUploads sends referenceFilenames only when there are some', async () => {
+    const fetchMock = mockFetch(201, { jobId: 'j', uploads: [] });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createUploads(['scan.xml', 'stig.zip'], ['stig.zip']);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      filenames: ['scan.xml', 'stig.zip'],
+      referenceFilenames: ['stig.zip'],
+    });
+
+    await createUploads(['scan.xml']);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ filenames: ['scan.xml'] });
+  });
 });

@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob as glob_module
 import logging
+import os
 import shutil
 import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import TextIO
 
 from app.core.pipeline import (
     PipelineError,
@@ -19,30 +22,104 @@ from app.core.pipeline import (
     parse_stage,
 )
 from app.processors.delta import DELTA_STATUSES, compute_delta
+from app.reference.normalize import MAX_SHOWN_CHARS, escape_controls, safe_name
 
 # Accepted input extensions, shared by both subcommands so a newly supported
-# format only has to be added in one place.
-_RESULT_EXTS = (".xml", ".cklb", ".nessus")
-_BENCHMARK_EXTS = (".xml", ".zip")
+# format only has to be added in one place. A ZIP is read as a folder in
+# either slot (each member routed as if supplied loose).
+_RESULT_EXTS = (".xml", ".cklb", ".nessus", ".zip")
+_REFERENCE_EXTS = (".xml", ".zip", ".cklb")
+_MAX_UNREADABLE_NAMED = 5   # unreadable directories named one by one; the rest are counted
+_MAX_STIG_LINES = 50        # per-STIG summary lines; the rest are counted
 
 
-def _resolve_paths(args: list[str], extensions: tuple[str, ...] = (".xml",)) -> list[Path]:
+def _file_or_link(path: Path) -> bool:
+    """A file, or a link that is not to a directory. A dangling link is kept on
+    purpose: the run then reads it, fails, and names it ("Could not read file")
+    like any other unreadable file, instead of it vanishing here."""
+    return path.is_file() or (path.is_symlink() and not path.is_dir())
+
+
+def _directory_key(root: str, info: os.stat_result) -> tuple[object, ...]:
+    """What identifies a directory for the walk: its device and inode, or, on a
+    file system that reports no inode numbers (st_ino 0: some network shares,
+    FUSE), its fully resolved path, so loops still end there."""
+    if info.st_ino:
+        return (info.st_dev, info.st_ino)
+    return ("path", os.path.normcase(os.path.realpath(root)))
+
+
+def _files_in(directory: Path, wanted: set[str], *, recursive: bool, unreadable: list[str]) -> list[Path]:
+    """The files in *directory* whose lower-cased suffix is in *wanted*, sorted.
+
+    With *recursive*, every subdirectory too, and a symlinked one is followed
+    on purpose (a STIG folder kept elsewhere); each directory is read once
+    (:func:`_directory_key`), so a second link to a folder adds nothing and a
+    link loop ends. Within a directory, real subdirectories are walked before
+    links, then by name, so which way into a folder names its files does not
+    depend on listing order. A directory that cannot be listed is added to
+    *unreadable*: it is reported, never skipped in silence. A dangling link
+    is kept (:func:`_file_or_link`).
+    """
+    if not recursive:
+        try:
+            with os.scandir(directory) as entries:
+                found = [Path(entry.path) for entry in entries]
+        except OSError:
+            unreadable.append(str(directory))
+            return []
+        return sorted(e for e in found if e.suffix.lower() in wanted and _file_or_link(e))
+
+    def listing_failed(exc: OSError) -> None:
+        unreadable.append(exc.filename if isinstance(exc.filename, str) else str(directory))
+
+    visited: set[tuple[object, ...]] = set()
+    found = []
+    for root, dirs, files in os.walk(directory, onerror=listing_failed, followlinks=True):
+        try:
+            key = _directory_key(root, os.stat(root))
+        except OSError:
+            unreadable.append(root)
+            dirs[:] = []
+            continue
+        if key in visited:
+            dirs[:] = []        # reached again through a link: already read
+            continue
+        visited.add(key)
+        dirs.sort(key=lambda name: (os.path.islink(os.path.join(root, name)), name))
+        found.extend(Path(root, name) for name in files if Path(name).suffix.lower() in wanted)
+    return sorted(e for e in found if _file_or_link(e))
+
+
+def _resolve_paths(
+    args: list[str], extensions: tuple[str, ...] = (".xml",), *, recursive: bool = False
+) -> list[Path]:
     """Expand directories and glob patterns into a flat list of Paths.
 
-    Directories are scanned for files matching *extensions* (case-insensitive).
-    Globs and explicit file paths pass through unchanged.
+    Directories are scanned for files whose suffix is one of *extensions* in
+    any letter case (a pattern match would be case-sensitive on Linux), in
+    sorted order, including every subdirectory when *recursive* (a folder of
+    STIG references works as a library; see :func:`_files_in`). Each
+    directory that could not be read gets a warning. Globs and explicit file
+    paths pass through unchanged.
     """
+    wanted = {ext.lower() for ext in extensions}
     paths: list[Path] = []
+    unreadable: list[str] = []
     for arg in args:
         p = Path(arg)
         if p.is_dir():
-            for ext in extensions:
-                paths.extend(sorted(p.glob(f"*{ext}")))
+            paths.extend(_files_in(p, wanted, recursive=recursive, unreadable=unreadable))
         elif "*" in arg or "?" in arg or "[" in arg:
             matched = [Path(m) for m in glob_module.glob(arg, recursive=True)]
             paths.extend(sorted(matched))
         else:
             paths.append(p)
+    log = logging.getLogger("app.cli")
+    for name in unreadable[:_MAX_UNREADABLE_NAMED]:
+        log.warning("could not read directory %s", escape_controls(name))
+    if len(unreadable) > _MAX_UNREADABLE_NAMED:
+        log.warning("… and %d more directories could not be read", len(unreadable) - _MAX_UNREADABLE_NAMED)
     return paths
 
 
@@ -51,7 +128,7 @@ _SUBCOMMANDS = ("report", "delta")
 # A one-value option consumes exactly the next token; a multi-value option
 # (nargs "+" / "*") consumes every following token up to the next flag.
 _ONE_VALUE_OPTS = ("--output",)
-_MULTI_VALUE_OPTS = ("--results", "--benchmarks", "--baseline", "--current")
+_MULTI_VALUE_OPTS = ("--results", "--references", "--benchmarks", "--baseline", "--current")
 
 
 def _add_common_flags(p: argparse.ArgumentParser) -> None:
@@ -87,18 +164,23 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "XCCDF results files (.xml) and/or Evaluate-STIG / STIG Viewer 3 "
-            "checklists (.cklb) / .nessus, or a directory (supports globs)."
+            "checklists (.cklb) / .nessus, ZIPs of them, or a directory (not "
+            "scanned recursively; supports globs)."
         ),
     )
     rp.add_argument(
-        "--benchmarks",
+        "--references", "--benchmarks",
+        dest="references",
         nargs="*",
         required=False,
         default=None,
         metavar="PATH",
         help=(
-            "STIG benchmark XML/ZIP files or directory (supports globs). "
-            "Optional for SCC — result files already embed benchmark definitions."
+            "STIG references that fill blank check/fix text: Manual STIG XML, "
+            "DISA STIG ZIP, SCAP benchmark, or .cklb checklist; a directory is "
+            "scanned recursively, so one folder of STIGs works as a library. "
+            "SCC results carry fix text only — add the Manual STIG for check "
+            "text. (--benchmarks is accepted as an alias.)"
         ),
     )
     _add_common_flags(rp)
@@ -121,12 +203,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Current (newer) scan results — same formats as report --results.",
     )
     dp.add_argument(
-        "--benchmarks",
+        "--references", "--benchmarks",
+        dest="references",
         nargs="*",
         required=False,
         default=None,
         metavar="PATH",
-        help="STIG benchmark XML/ZIP applied to BOTH sets (optional for SCC).",
+        help="STIG references applied to BOTH sets (see report --references).",
     )
     _add_common_flags(dp)
 
@@ -187,7 +270,22 @@ def _misplaced_subcommand(argv: list[str]) -> str | None:
     return None
 
 
+def _utf8(stream: TextIO) -> TextIO:
+    """*stream* (the log's), writing UTF-8; a character it cannot write becomes an escape.
+
+    Redirected on Windows, stderr is in the ANSI code page (cp1252), so the
+    em-dashes, ellipses and non-ASCII names in log lines came out garbled. A
+    stream that cannot be reconfigured is left as it is.
+    """
+    if hasattr(stream, "reconfigure"):
+        with contextlib.suppress(OSError, ValueError):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    return stream
+
+
 def main(argv: list[str] | None = None) -> int:
+    stream = _utf8(sys.stderr)      # first: usage errors are printed there too
+    _utf8(sys.stdout)               # --help and the report path are printed there
     parser = _build_parser()
     raw = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(_normalize_argv(raw))
@@ -196,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=level,
         format="%(levelname)s  %(name)s  %(message)s",
-        stream=sys.stderr,
+        stream=stream,
     )
 
     if args.command == "delta":
@@ -207,11 +305,12 @@ def main(argv: list[str] | None = None) -> int:
 def _run_report(args: argparse.Namespace) -> int:
     log = logging.getLogger("app.cli")
 
-    # Resolve file paths (results: .xml/.cklb/.nessus, benchmarks: .xml/.zip)
+    # Resolve file paths. A reference directory is scanned recursively (a
+    # folder of STIGs is a library); a results directory is not.
     results_paths = _resolve_paths(args.results, extensions=_RESULT_EXTS)
-    benchmark_paths = (
-        _resolve_paths(args.benchmarks, extensions=_BENCHMARK_EXTS)
-        if args.benchmarks
+    reference_paths = (
+        _resolve_paths(args.references, extensions=_REFERENCE_EXTS, recursive=True)
+        if args.references
         else []
     )
 
@@ -219,34 +318,40 @@ def _run_report(args: argparse.Namespace) -> int:
         log.error("No results files found for: %s", args.results)
         return 1
 
-    # When no benchmark files are supplied the pipeline reuses the XCCDF
-    # results as benchmark sources (SCC self-contained format); CKLB
-    # checklists never need benchmarks.
-    if not benchmark_paths:
-        log.info(
-            "No --benchmarks supplied — XCCDF results will be used as their "
-            "own benchmark source (SCC self-contained format)."
-        )
-
     log.info("Results files:   %d", len(results_paths))
-    log.info("Benchmark files: %d", len(benchmark_paths))
+    log.info("Reference files: %d", len(reference_paths))
 
     extract_dir = Path(tempfile.mkdtemp(prefix="stig_zip_"))
     try:
         try:
-            result = parse_stage(results_paths, benchmark_paths, extract_dir)
+            result = parse_stage(results_paths, reference_paths, extract_dir)
         except PipelineError as exc:
             # The per-file warnings collected before the failure are the
             # diagnosis; show them ahead of the error.
             for w in exc.warnings:
-                log.warning(w)
-            log.error("%s", exc)
+                log.warning("%s", escape_controls(w))
+            log.error("%s", escape_controls(str(exc)))
             return 1
 
         for w in result.warnings:
-            log.warning(w)
+            log.warning("%s", escape_controls(w))
 
         log.info("Actionable findings: %d", len(result.findings))
+        # What enrichment did, per STIG. A finding matched but refused (several
+        # matches, or its STIG ID under another STIG's title) is counted apart
+        # from one no reference holds. The title comes from an upload.
+        stigs = list(result.enrichment.stigs.items())
+        for title, counts in stigs[:_MAX_STIG_LINES]:
+            log.info(
+                "%s — check text filled: %d, fix text filled: %d, severity filled: %d, from a "
+                "different release: %d, not in a supplied reference: %d, several matches: %d, "
+                "other STIG title: %d",
+                safe_name(title, MAX_SHOWN_CHARS), counts.filled_check, counts.filled_fix,
+                counts.filled_severity, counts.drifted, counts.unmatched, counts.ambiguous,
+                counts.product_refused,
+            )
+        if len(stigs) > _MAX_STIG_LINES:
+            log.info("… and %d more STIG(s)", len(stigs) - _MAX_STIG_LINES)
 
         if args.output:
             output_path = Path(args.output)
@@ -255,9 +360,9 @@ def _run_report(args: argparse.Namespace) -> int:
 
         log.info("Exporting to %s…", output_path)
         try:
-            export_stage(result.findings, output_path)
+            export_stage(result.findings, output_path, enrichment=result.enrichment, warnings=result.warnings)
         except Exception as exc:
-            log.error("Export failed: %s", exc)
+            log.error("Export failed: %s", escape_controls(str(exc)))
             return 1
 
         print(f"Report written: {output_path.resolve()}")
@@ -271,9 +376,9 @@ def _run_delta(args: argparse.Namespace) -> int:
 
     baseline_paths = _resolve_paths(args.baseline, extensions=_RESULT_EXTS)
     current_paths = _resolve_paths(args.current, extensions=_RESULT_EXTS)
-    benchmark_paths = (
-        _resolve_paths(args.benchmarks, extensions=_BENCHMARK_EXTS)
-        if args.benchmarks
+    reference_paths = (
+        _resolve_paths(args.references, extensions=_REFERENCE_EXTS, recursive=True)
+        if args.references
         else []
     )
 
@@ -287,7 +392,7 @@ def _run_delta(args: argparse.Namespace) -> int:
     # Explicit (non-glob, non-directory) paths pass through _resolve_paths
     # unchecked; a typo'd filename would otherwise surface as an XML parser
     # traceback rather than a usage error.
-    missing = [p for p in (*baseline_paths, *current_paths, *benchmark_paths) if not p.is_file()]
+    missing = [p for p in (*baseline_paths, *current_paths, *reference_paths) if not p.is_file()]
     if missing:
         log.error(
             "Input file(s) not found: %s", ", ".join(str(p) for p in missing)
@@ -295,39 +400,40 @@ def _run_delta(args: argparse.Namespace) -> int:
         return 1
 
     log.info(
-        "Baseline files: %d  Current files: %d  Benchmark files: %d",
+        "Baseline files: %d  Current files: %d  Reference files: %d",
         len(baseline_paths),
         len(current_paths),
-        len(benchmark_paths),
+        len(reference_paths),
     )
 
     extract_dir = Path(tempfile.mkdtemp(prefix="stig_zip_"))
     try:
         # Per-side extraction dirs: sharing one would expand every benchmark
-        # ZIP twice (DISA STIG library ZIPs are large). allow_empty lets a
-        # fully remediated scan set through — zero actionable findings is a
-        # legitimate delta input, not a failure.
+        # ZIP twice (DISA STIG library ZIPs are large). Both sides take the
+        # same references, so a rule is filled and titled alike in each.
+        # allow_empty lets a fully remediated scan set through — zero
+        # actionable findings is a legitimate delta input, not a failure.
         # On failure the per-file warnings parse_stage collected first are
         # the diagnosis: log them, with their side, ahead of the error.
         try:
             base_res = parse_stage(
-                baseline_paths, benchmark_paths, extract_dir / "baseline",
+                baseline_paths, reference_paths, extract_dir / "baseline",
                 allow_empty=True,
             )
         except PipelineError as exc:
             for w in exc.warnings:
-                log.warning("Baseline scan set: %s", w)
-            log.error("Baseline scan set: %s", exc)
+                log.warning("Baseline scan set: %s", escape_controls(w))
+            log.error("Baseline scan set: %s", escape_controls(str(exc)))
             return 1
         try:
             curr_res = parse_stage(
-                current_paths, benchmark_paths, extract_dir / "current",
+                current_paths, reference_paths, extract_dir / "current",
                 allow_empty=True,
             )
         except PipelineError as exc:
             for w in exc.warnings:
-                log.warning("Current scan set: %s", w)
-            log.error("Current scan set: %s", exc)
+                log.warning("Current scan set: %s", escape_controls(w))
+            log.error("Current scan set: %s", escape_controls(str(exc)))
             return 1
 
         # Parse-stage warnings (unparseable files, files with no rule
@@ -344,7 +450,7 @@ def _run_delta(args: argparse.Namespace) -> int:
             *(f"Current scan set: {w}" for w in curr_res.warnings if w not in shared),
         ]
         for w in parse_warnings:
-            log.warning(w)
+            log.warning("%s", escape_controls(w))
 
         # Coverage (which host/STIG pairs each set actually scanned) comes
         # from the scans, not the finding lists: a clean scan still counts
@@ -379,7 +485,7 @@ def _run_delta(args: argparse.Namespace) -> int:
         try:
             export_delta_stage(delta, output_path)
         except Exception as exc:
-            log.error("Export failed: %s", exc)
+            log.error("Export failed: %s", escape_controls(str(exc)))
             return 1
 
         print(f"Delta report written: {output_path.resolve()}")

@@ -1122,3 +1122,135 @@ class TestApiCancel:
         assert resp["statusCode"] == 500
         # The job is still running — do not mark it cancelled when it is not.
         assert jobs.get("job1")["status"] == "running"
+
+
+
+def test_two_uploads_with_one_name_are_refused_not_overwritten(aws):
+    # Each upload is stored under its file name, and the web client matches upload URLs to files by
+    # name: two files with one name would silently become one. The request is refused instead.
+    event = {"httpMethod": "POST", "resource": "/uploads",
+             "body": json.dumps({"filenames": ["results.xml", "bench.zip", "results.xml"]})}
+    resp = api.handler(event, None)
+    assert resp["statusCode"] == 400
+    assert "results.xml" in json.loads(resp["body"])["error"]
+
+
+# --- the reference hint: recorded by POST /uploads, carried to the parse stage --------------------------
+
+def _post_uploads(body: dict) -> dict:
+    return api.handler({"httpMethod": "POST", "resource": "/uploads", "body": json.dumps(body)}, None)
+
+
+def test_uploads_accepts_reference_filenames_and_rejects_strangers(aws, jobs):
+    ok = _post_uploads({"filenames": ["a.xml", "ref.cklb"], "referenceFilenames": ["ref.cklb"]})
+    assert ok["statusCode"] == 201
+    job_id = json.loads(ok["body"])["jobId"]
+    assert jobs.get(job_id)["reference_filenames"] == ["ref.cklb"]
+
+    bad = _post_uploads({"filenames": ["a.xml"], "referenceFilenames": ["other.xml"]})
+    assert bad["statusCode"] == 400
+    assert "referenceFilenames" in json.loads(bad["body"])["error"]
+
+    not_a_list = _post_uploads({"filenames": ["a.xml"], "referenceFilenames": "a.xml"})
+    assert not_a_list["statusCode"] == 400
+
+    without = _post_uploads({"filenames": ["a.xml"]})
+    assert jobs.get(json.loads(without["body"])["jobId"])["reference_filenames"] == []
+
+
+def test_a_duplicate_name_is_refused_when_it_is_a_reference_too(aws):
+    resp = _post_uploads({"filenames": ["ref.zip", "ref.zip"], "referenceFilenames": ["ref.zip"]})
+    assert resp["statusCode"] == 400
+    assert "ref.zip" in json.loads(resp["body"])["error"]
+
+
+def test_execution_input_carries_reference_filenames():
+    payload = json.loads(api._execution_input(
+        "j", {"input_filenames": ["a.xml", "r.zip"], "reference_filenames": ["r.zip"]}, False))
+    assert payload["referenceFilenames"] == ["r.zip"]
+    assert json.loads(api._execution_input("j", {"input_filenames": ["a.xml"]}, False))["referenceFilenames"] == []
+
+
+def test_the_parse_lambda_reads_a_checklist_named_in_the_hint_as_a_reference(aws, jobs, monkeypatch, tmp_path):
+    from pathlib import Path
+
+    monkeypatch.setattr(common, "WORK_ROOT", tmp_path)
+    fix = Path(__file__).parent / "fixtures"
+    s3 = boto3.client("s3", region_name=REGION)
+    names = ["evaluate_stig_results.xml", "evaluate_stig_checklist.cklb"]
+    for name in names:
+        s3.put_object(Bucket=UPLOADS, Key=f"jobs/job1/input/{name}", Body=(fix / name).read_bytes())
+    jobs.create("job1", status="queued")
+
+    event = {"jobId": "job1", "inputFilenames": names, "referenceFilenames": ["evaluate_stig_checklist.cklb"]}
+    assert parser.handler(event, None) == event
+    assert jobs.get("job1")["source_file_count"] == 1          # one scan; the checklist was a reference
+    s3.head_object(Bucket=ARTIFACTS, Key="jobs/job1/enrichment.json")
+
+
+
+# --- one job record is one DynamoDB item: file names and warnings are bounded so it fits --------------
+
+def _names_up_to(budget: int) -> list[str]:
+    """As many upload names as fit *budget* bytes of JSON; non-ASCII, which JSON escapes, so each costs most."""
+    names: list[str] = []
+    while len(json.dumps(names + [f"{len(names):05d}" + "é" * 60 + ".xml"])) <= budget:
+        names.append(f"{len(names):05d}" + "é" * 60 + ".xml")
+    return names
+
+
+def test_uploads_refuse_file_names_past_the_record_budget(aws, jobs):
+    from app.lambdas.api import _MAX_FILENAME_BYTES
+    too_many = _names_up_to(_MAX_FILENAME_BYTES)
+    too_many.append(f"{len(too_many):05d}" + "é" * 60 + ".xml")     # the name that did not fit
+    resp = _post_uploads({"filenames": too_many})
+    assert resp["statusCode"] == 400
+    assert f"{_MAX_FILENAME_BYTES:,} bytes" in json.loads(resp["body"])["error"]
+
+
+def test_the_largest_job_still_fits_one_item(aws, jobs, monkeypatch, tmp_path):
+    # The most file names the API accepts, all marked as references (so stored three times: the names,
+    # the hint and the launch input), then a parse whose warnings are emoji: the item DynamoJobStore
+    # writes must stay under DynamoDB's 400 KB, or the job ends with the generic error. The stage runs
+    # on a memory store holding the same record and the item is measured as DynamoJobStore writes it:
+    # moto's UpdateItem counts the replaced attribute twice (old and new value), which DynamoDB does not.
+    from app.core import stages
+    from app.core.artifact_store import LocalArtifactStore
+    from app.core.job_store import MemoryJobStore
+    from app.core.pipeline import ParseResult
+    from app.lambdas.api import _MAX_FILENAME_BYTES
+
+    names = _names_up_to(_MAX_FILENAME_BYTES)
+    created = _post_uploads({"filenames": names, "referenceFilenames": names})
+    assert created["statusCode"] == 201
+    job_id = json.loads(created["body"])["jobId"]
+
+    monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws-us-gov:states:::sm")
+    real_client = boto3.client
+
+    class FakeSfn:
+        def start_execution(self, **kwargs):
+            return {"executionArn": "arn:aws-us-gov:states:::exec"}
+
+    monkeypatch.setattr(api.boto3, "client",
+                        lambda service, **kw: FakeSfn() if service == "stepfunctions" else real_client(service, **kw))
+    started = api.handler({"httpMethod": "POST", "resource": "/jobs", "body": json.dumps({"jobId": job_id})}, None)
+    assert started["statusCode"] == 202
+
+    memory = MemoryJobStore()
+    memory.create(job_id, **jobs.get(job_id))
+    uploads = LocalArtifactStore(tmp_path / "uploads")
+    for name in names:
+        uploads.put_bytes(f"jobs/{job_id}/input/{name}", b"<a/>")
+    lines = [f"{i:03d} " + "😀" * 600 for i in range(250)]
+    monkeypatch.setattr(stages, "parse_stage", lambda *a, **k: ParseResult(
+        findings=[], warnings=lines, source_file_count=1, coverage=set()))
+    assert stages.run_parse_stage(job_id, names, LocalArtifactStore(tmp_path / "artifacts"), memory,
+                                  work_dir=tmp_path / "w", input_store=uploads,
+                                  reference_filenames=names) is True
+    record = memory.get(job_id)
+    assert record["phase"] == "parsed" and record["warnings"][-1].endswith("more warnings not shown")
+    # DynamoJobStore's item: job_id, data (the record as JSON), version, expiresAt; names count too.
+    item_bytes = (len("job_id") + len(job_id) + len("data") + len(json.dumps(record).encode("utf-8"))
+                  + len("version") + 21 + len("expiresAt") + 21)
+    assert item_bytes < 400_000, item_bytes

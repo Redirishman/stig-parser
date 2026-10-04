@@ -21,7 +21,7 @@
         </span>
         <h1>STIG Compliance Parser</h1>
       </div>
-      <p class="subtitle">Upload scan results to generate a consolidated findings report. SCC, Evaluate-STIG, and Nessus files are self-contained &mdash; no separate benchmark upload needed.</p>
+      <p class="subtitle">Upload scan results to generate a consolidated findings report. Add the Manual STIG as a reference to include check text &mdash; SCC results carry fix text only.</p>
     </header>
 
     <main id="app">
@@ -46,14 +46,14 @@
                 </svg>
               </div>
               <h2>Scan Results</h2>
-              <p>XCCDF results from SCC or OpenSCAP (.xml), Evaluate-STIG / STIG Viewer checklists (.cklb), or Nessus compliance scans (.nessus)</p>
+              <p>XCCDF results from SCC or OpenSCAP (.xml), Evaluate-STIG / STIG Viewer checklists (.cklb), or Nessus compliance scans (.nessus). A ZIP is read as a folder.</p>
               <button type="button" class="btn btn-secondary" id="results-browse">Choose Files</button>
-              <input type="file" id="results-input" name="results" multiple accept=".xml,.cklb,.nessus" hidden>
+              <input type="file" id="results-input" name="results" multiple accept=".xml,.zip,.cklb,.nessus" hidden>
               <p class="zone-notice" id="results-zone-notice" role="status" hidden></p>
               <ul class="file-list" id="results-file-list"></ul>
             </div>
 
-            <!-- Benchmark drop zone (secondary: optional for the dominant SCC path) -->
+            <!-- Reference drop zone: STIG content that fills blank check/fix text -->
             <div class="upload-zone upload-zone-optional" id="benchmarks-zone">
               <div class="zone-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -61,10 +61,10 @@
                   <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
                 </svg>
               </div>
-              <h2>STIG Benchmarks <span class="badge-optional">Optional for SCC</span></h2>
-              <p>STIG benchmark XML or ZIP files from DISA (public.cyber.mil). Not needed when uploading SCC result files.</p>
+              <h2>STIG References <span class="badge-optional">Optional</span></h2>
+              <p>Manual STIG ZIPs add check text. Accepts DISA STIG ZIP or Manual XCCDF (.xml), SCAP benchmarks, and STIG Viewer checklists (.cklb). SCC results carry fix text only. A ZIP is read as a folder.</p>
               <button type="button" class="btn btn-secondary" id="benchmarks-browse">Choose Files</button>
-              <input type="file" id="benchmarks-input" name="benchmarks" multiple accept=".xml,.zip" hidden>
+              <input type="file" id="benchmarks-input" name="benchmarks" multiple accept=".xml,.zip,.cklb" hidden>
               <p class="zone-notice" id="benchmarks-zone-notice" role="status" hidden></p>
               <ul class="file-list" id="benchmarks-file-list"></ul>
             </div>
@@ -107,7 +107,7 @@
           </div>
           <h2>Report Ready</h2>
           <dl class="report-summary" id="report-summary" hidden>
-            <div class="summary-row"><dt>Result files</dt><dd id="sum-files"></dd></div>
+            <div class="summary-row"><dt>Result files read</dt><dd id="sum-files"></dd></div>
             <div class="summary-row"><dt>Hosts</dt><dd id="sum-hosts"></dd></div>
             <div class="summary-row summary-total"><dt>Findings</dt><dd id="sum-findings"></dd></div>
             <div class="summary-row summary-cat"><dt>CAT I &mdash; high</dt><dd id="sum-cat1"></dd></div>

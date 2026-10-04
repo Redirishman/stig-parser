@@ -23,18 +23,19 @@ class TestArgumentParsing:
         with pytest.raises(SystemExit):
             parser.parse_args(_normalize_argv([]))
 
+    # --benchmarks is the alias of --references; both land in args.references.
     def test_benchmarks_is_optional(self):
         parser = _build_parser()
         # No --benchmarks flag at all — must not raise
         args = parser.parse_args(_normalize_argv(["--results", "a.xml"]))
-        assert args.benchmarks is None
+        assert args.references is None
 
     def test_benchmarks_accepts_empty_list(self):
         parser = _build_parser()
         args = parser.parse_args(
             _normalize_argv(["--results", "a.xml", "--benchmarks"])
         )
-        assert args.benchmarks == []
+        assert args.references == []
 
     def test_benchmarks_accepts_multiple_paths(self):
         parser = _build_parser()
@@ -44,7 +45,20 @@ class TestArgumentParsing:
             )
         )
         assert args.results == ["a.xml", "b.xml"]
-        assert args.benchmarks == ["x.xml", "y.zip"]
+        assert args.references == ["x.xml", "y.zip"]
+
+    def test_references_accepts_multiple_paths(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            _normalize_argv(["--results", "a.xml", "--references", "x.xml", "lib/", "c.cklb"])
+        )
+        assert args.references == ["x.xml", "lib/", "c.cklb"]
+
+    def test_a_references_path_named_like_a_subcommand_is_not_rejected(self):
+        # --references is multi-value: the scan for a misplaced subcommand skips its paths.
+        assert _normalize_argv(["--results", "a.xml", "--references", "delta"]) == [
+            "report", "--results", "a.xml", "--references", "delta",
+        ]
 
     def test_output_flag_parsed(self):
         parser = _build_parser()
@@ -80,7 +94,7 @@ class TestDeltaArgs:
             "delta", "--baseline", "a.xml", "--current", "b.xml",
             "--benchmarks", "x.xml", "--output", "d.xlsx",
         ])
-        assert args.benchmarks == ["x.xml"]
+        assert args.references == ["x.xml"]
         assert args.output == "d.xlsx"
 
     def test_report_subcommand_parses(self):
@@ -137,7 +151,193 @@ class TestDeltaArgs:
 # Path resolution
 # ---------------------------------------------------------------------------
 
+def _deny_listing(monkeypatch, denied: set[str]) -> None:
+    """Make listing any directory whose name is in *denied* raise PermissionError, as a folder
+    without read access does (no real ACLs: the test must run anywhere)."""
+    import os
+    real = os.scandir
+
+    def scandir(path="."):
+        if Path(path).name in denied:
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+
+
+def _symlink_dir(link: Path, target: Path) -> None:
+    import os
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks cannot be created here: {exc}")
+
+
+class TestDirectoryWalk:
+    """A reference library is walked in full: an unreadable folder is reported, a symlinked
+    folder is followed (once), a link loop ends."""
+
+    def _library(self, tmp_path: Path) -> Path:
+        lib = tmp_path / "lib"
+        for name in ("a/one.xml", "b/two.xml", "b/deeper/three.cklb"):
+            (lib / name).parent.mkdir(parents=True, exist_ok=True)
+            (lib / name).write_text("<x/>")
+        return lib
+
+    def test_an_unreadable_folder_is_reported_not_skipped(self, tmp_path, monkeypatch, caplog):
+        from app.cli import _REFERENCE_EXTS
+        lib = self._library(tmp_path)
+        _deny_listing(monkeypatch, {"b"})
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            paths = _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert [p.name for p in paths] == ["one.xml"]
+        assert [r.getMessage() for r in caplog.records if r.name == "app.cli"] == [
+            f"could not read directory {lib / 'b'}"]
+
+    def test_an_unreadable_results_folder_is_reported_too(self, tmp_path, monkeypatch, caplog):
+        from app.cli import _RESULT_EXTS
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "scan.xml").write_text("<x/>")
+        _deny_listing(monkeypatch, {"results"})
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            assert _resolve_paths([str(results)], extensions=_RESULT_EXTS) == []
+        assert [r.getMessage() for r in caplog.records if r.name == "app.cli"] == [
+            f"could not read directory {results}"]
+
+    def test_unreadable_folders_are_named_five_at_most(self, tmp_path, monkeypatch, caplog):
+        from app.cli import _REFERENCE_EXTS
+        lib = tmp_path / "lib"
+        for i in range(8):
+            (lib / f"d{i}").mkdir(parents=True)
+        _deny_listing(monkeypatch, {f"d{i}" for i in range(8)})
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        messages = [r.getMessage() for r in caplog.records if r.name == "app.cli"]
+        assert len(messages) == 6 and messages[-1] == "… and 3 more directories could not be read"
+
+    def test_a_symlinked_folder_is_followed_once(self, tmp_path):
+        from app.cli import _REFERENCE_EXTS
+        lib = self._library(tmp_path)
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "four.xml").write_text("<x/>")
+        _symlink_dir(lib / "linked", outside)            # a STIG folder kept elsewhere
+        _symlink_dir(lib / "a_again", lib / "a")          # a second way into one folder
+        paths = _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert sorted(p.name for p in paths) == ["four.xml", "one.xml", "three.cklb", "two.xml"]
+
+    def test_a_link_loop_ends(self, tmp_path):
+        from app.cli import _REFERENCE_EXTS
+        lib = self._library(tmp_path)
+        _symlink_dir(lib / "b" / "deeper" / "up", lib)   # points back at the top
+        paths = _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert sorted(p.name for p in paths) == ["one.xml", "three.cklb", "two.xml"]
+
+    def test_a_folder_that_lists_but_cannot_be_stat_ed_is_reported(self, tmp_path, monkeypatch, caplog):
+        import os
+        from app.cli import _REFERENCE_EXTS
+        lib = self._library(tmp_path)
+        real = os.stat
+
+        def stat(path, *args, **kwargs):
+            if Path(path).name == "b":
+                raise PermissionError(13, "Permission denied", os.fspath(path))
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", stat)
+        with caplog.at_level(logging.WARNING, logger="app.cli"):
+            paths = _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert [p.name for p in paths] == ["one.xml"]
+        assert [r.getMessage() for r in caplog.records if r.name == "app.cli"] == [
+            f"could not read directory {lib / 'b'}"]
+
+    @pytest.mark.parametrize("with_loop", [False, True])
+    def test_a_file_system_without_inode_numbers_is_walked_in_full(self, tmp_path, monkeypatch, with_loop):
+        # Some network shares and FUSE file systems report st_ino 0 for every directory: read
+        # by (device, inode), every directory after the first looked visited and was skipped.
+        import os
+        import stat as stat_module
+        from app.cli import _REFERENCE_EXTS
+        lib = self._library(tmp_path)
+        if with_loop:
+            _symlink_dir(lib / "b" / "deeper" / "up", lib)
+        real = os.stat
+
+        def stat(path, *args, **kwargs):
+            r = real(path, *args, **kwargs)
+            if not stat_module.S_ISDIR(r.st_mode):
+                return r
+            return os.stat_result((r.st_mode, 0, r.st_dev, r.st_nlink, r.st_uid, r.st_gid, r.st_size,
+                                   r.st_atime, r.st_mtime, r.st_ctime))
+
+        monkeypatch.setattr(os, "stat", stat)
+        paths = _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert sorted(p.name for p in paths) == ["one.xml", "three.cklb", "two.xml"]
+
+    def test_a_folder_reached_two_ways_is_named_by_its_real_path(self, tmp_path):
+        # The first way into a directory wins; scandir order is arbitrary on Linux. Real
+        # directories are walked before links, so the paths do not depend on that order.
+        from app.cli import _REFERENCE_EXTS
+        lib = tmp_path / "lib"
+        (lib / "z_real").mkdir(parents=True)
+        (lib / "z_real" / "x.xml").write_text("<x/>")
+        _symlink_dir(lib / "a_link", lib / "z_real")       # sorts first by name
+        paths = _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert [p.relative_to(lib).as_posix() for p in paths] == ["z_real/x.xml"]
+
+    def test_a_dangling_link_is_kept_and_named_by_the_run(self, tmp_path, caplog):
+        # Not dropped in silence: the run reads it, fails, and says so like any unreadable file.
+        import os
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        try:
+            os.symlink(tmp_path / "gone.xml", lib / "gone.xml")
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlinks cannot be created here: {exc}")
+        from app.cli import _REFERENCE_EXTS
+        assert _resolve_paths([str(lib)], extensions=_REFERENCE_EXTS, recursive=True) == [lib / "gone.xml"]
+        caplog.set_level(logging.WARNING)
+        assert main(["report", "--results", str(FIXTURES / "scc_embedded_results.xml"),
+                     "--references", str(lib), "--output", str(tmp_path / "r.xlsx")]) == 0
+        assert any(r.getMessage() == "Could not read file: gone.xml"
+                   for r in caplog.records if r.name == "app.cli"), [r.getMessage() for r in caplog.records]
+
+
+def test_the_per_stig_summary_is_capped_at_50_lines(tmp_path, caplog, monkeypatch):
+    import app.cli as cli
+    from app.core.pipeline import parse_stage as real_parse_stage
+    from app.reference.enrich import StigCounts
+
+    def parse_with_many_stigs(*args, **kwargs):
+        result = real_parse_stage(*args, **kwargs)
+        result.enrichment.stigs = {f"STIG {i:02d}": StigCounts() for i in range(53)}
+        return result
+
+    monkeypatch.setattr(cli, "parse_stage", parse_with_many_stigs)
+    caplog.set_level(logging.INFO)
+    assert main(["report", "--results", str(FIXTURES / "scc_embedded_results.xml"),
+                 "--output", str(tmp_path / "r.xlsx")]) == 0
+    lines = [r.getMessage() for r in caplog.records if r.name == "app.cli" and "check text filled" in r.getMessage()]
+    assert len(lines) == 50 and lines[-1].startswith("STIG 49 — ")
+    assert any(r.getMessage() == "… and 3 more STIG(s)" for r in caplog.records if r.name == "app.cli")
+
+
 class TestResolvePaths:
+    def test_a_directory_scan_matches_extensions_in_any_case_and_only_files(self, tmp_path):
+        # Whatever the file system's case rules: .XML, .Cklb, .ZIP are found; a folder named
+        # like a file is not a file; the order is the sorted paths, not one run per extension.
+        from app.cli import _REFERENCE_EXTS, _RESULT_EXTS
+        for name in ("d.xml", "a.XML", "c.ZIP", "b.Cklb", "e.txt", "sub/f.Xml"):
+            (tmp_path / name).parent.mkdir(exist_ok=True)
+            (tmp_path / name).write_text("<x/>")
+        (tmp_path / "folder.xml").mkdir()
+        flat = _resolve_paths([str(tmp_path)], extensions=_RESULT_EXTS)
+        assert [p.name for p in flat] == ["a.XML", "b.Cklb", "c.ZIP", "d.xml"]
+        deep = _resolve_paths([str(tmp_path)], extensions=_REFERENCE_EXTS, recursive=True)
+        assert [p.relative_to(tmp_path).as_posix() for p in deep] == [
+            "a.XML", "b.Cklb", "c.ZIP", "d.xml", "sub/f.Xml"]
+
     def test_directory_resolves_to_xml_files(self, tmp_path):
         (tmp_path / "a.xml").write_text("<a/>")
         (tmp_path / "b.xml").write_text("<b/>")
@@ -202,10 +402,11 @@ class TestMainOptionalBenchmarks:
             ])
         assert rc == 0
         assert out.exists()
-        # The fallback message should appear in the log
-        assert any(
-            "No --benchmarks supplied" in r.message for r in caplog.records
-        ), "expected fallback INFO message when --benchmarks omitted"
+        # The run says it used no reference (the old "No --benchmarks
+        # supplied" line no longer described what happens, and is gone).
+        messages = [r.message for r in caplog.records if r.name == "app.cli"]
+        assert "Reference files: 0" in messages, messages
+        assert not any("No --benchmarks supplied" in m for m in messages)
 
     def test_empty_benchmarks_flag_also_uses_results_files(self, tmp_path):
         """`--benchmarks` with no values should behave like omitting the flag."""
@@ -395,7 +596,7 @@ class TestDeltaEndToEnd:
         assert rc == 0
         hits = [
             (r.name, r.message) for r in caplog.records
-            if "different Vuln-ID coverage" in r.message
+            if "have no V-ID, so they were matched by rule ID instead" in r.message
         ]
         assert len(hits) == 1, f"delta warning must be logged exactly once: {hits}"
 
@@ -871,11 +1072,11 @@ class TestZeroRuleResultScanEndToEnd:
         assert "Resolved" not in rows.values()
         expected = "win_no_results.xml: 0 rule results"
         assert any(
-            expected in r.message and "--benchmarks" in r.message
+            expected in r.message and "pass it as a reference" in r.message
             for r in caplog.records if r.name == "app.cli"
         ), [r.message for r in caplog.records]
         listed = _warning_rows(load_workbook(out)["Summary"])
-        assert any(expected in w and "--benchmarks" in w for w in listed), listed
+        assert any(expected in w and "pass it as a reference" in w for w in listed), listed
 
 
 class TestUntitledScanFailsClosedEndToEnd:
@@ -989,3 +1190,373 @@ class TestReportBackCompatEndToEnd:
         assert {"Findings", "Summary"} <= set(wb.sheetnames)
         # Single-run report, not a delta: no Delta column.
         assert wb["Findings"].cell(row=1, column=1).value != "Delta"
+
+
+# ---------------------------------------------------------------------------
+# --references (alias --benchmarks)
+# ---------------------------------------------------------------------------
+
+_SUMMARY_LINE = (
+    "Microsoft Windows 11 STIG SCAP Benchmark — check text filled: 2, fix text filled: 0, "
+    "severity filled: 0, from a different release: 1, not in a supplied reference: 1, several matches: 0, "
+    "other STIG title: 0"
+)
+
+
+class TestReferencesFlag:
+    FIX = FIXTURES
+
+    def _findings_sheet(self, path):
+        return load_workbook(path)["Findings"]
+
+    def _source_rows(self, path) -> list[str]:
+        """File column of each row of the Summary sheet's Reference sources table."""
+        rows = [[c.value for c in r] for r in load_workbook(path)["Summary"].iter_rows()]
+        start = next(i for i, r in enumerate(rows) if r[0] == "Reference sources") + 2
+        end = next(i for i in range(start, len(rows)) if rows[i][0] == "Not found in any supplied reference")
+        return [r[0] for r in rows[start:end]]
+
+    def test_references_flag_fills_check_text(self, tmp_path):
+        out = tmp_path / "r.xlsx"
+        rc = main(["report", "--results", str(self.FIX / "scc_embedded_results.xml"),
+                   "--references", str(self.FIX / "manual_stig_win11.xml"), "--output", str(out)])
+        assert rc == 0
+        ws = self._findings_sheet(out)
+        assert ws["H2"].value and ws["K2"].value.startswith("Check: manual_stig_win11.xml V2R9")
+
+    def test_benchmarks_is_still_accepted_as_an_alias(self, tmp_path):
+        out = tmp_path / "r.xlsx"
+        rc = main(["--results", str(self.FIX / "scc_embedded_results.xml"),
+                   "--benchmarks", str(self.FIX / "manual_stig_win11.xml"), "--output", str(out)])
+        assert rc == 0 and self._findings_sheet(out)["H2"].value
+
+    def test_reference_directory_is_scanned_recursively(self, tmp_path):
+        import shutil
+        lib = tmp_path / "stigs" / "windows"
+        lib.mkdir(parents=True)
+        shutil.copy(self.FIX / "manual_stig_win11.xml", lib / "manual_stig_win11.xml")
+        out = tmp_path / "r.xlsx"
+        rc = main(["report", "--results", str(self.FIX / "scc_embedded_results.xml"),
+                   "--references", str(tmp_path / "stigs"), "--output", str(out)])
+        assert rc == 0 and self._findings_sheet(out)["H2"].value
+
+    def test_results_directory_is_not_scanned_recursively(self, tmp_path, caplog):
+        import shutil
+        nested = tmp_path / "results" / "older"
+        nested.mkdir(parents=True)
+        shutil.copy(self.FIX / "scc_embedded_results.xml", nested / "scan.xml")
+        with caplog.at_level(logging.ERROR, logger="app.cli"):
+            rc = main(["report", "--results", str(tmp_path / "results"),
+                       "--output", str(tmp_path / "r.xlsx")])
+        assert rc == 1
+        assert any("No results files found" in r.message for r in caplog.records)
+
+    def test_results_slot_takes_a_zip_from_a_directory(self, tmp_path):
+        import zipfile
+        scans = tmp_path / "scans"
+        scans.mkdir()
+        with zipfile.ZipFile(scans / "scans.zip", "w") as zf:
+            zf.write(self.FIX / "scc_embedded_results.xml", "wkstn-01/results.xml")
+        out = tmp_path / "r.xlsx"
+        rc = main(["report", "--results", str(scans),
+                   "--references", str(self.FIX / "manual_stig_win11.xml"), "--output", str(out)])
+        assert rc == 0
+        ws = self._findings_sheet(out)
+        assert ws.max_row == 4 and ws["K2"].value.startswith("Check: manual_stig_win11.xml V2R9")
+
+    def test_run_summary_reports_what_was_filled(self, tmp_path, caplog):
+        caplog.set_level(logging.INFO)
+        main(["report", "--results", str(self.FIX / "scc_embedded_results.xml"),
+              "--references", str(self.FIX / "manual_stig_win11.xml"), "--output", str(tmp_path / "r.xlsx")])
+        messages = [r.getMessage() for r in caplog.records if r.name == "app.cli"]
+        assert any("check text filled: 2" in m for m in messages)
+        assert _SUMMARY_LINE in messages, messages
+        assert "Reference files: 1" in messages
+        assert not any("--benchmarks" in m for m in messages), "the old fallback line is gone"
+
+    def test_run_summary_escapes_the_stig_title(self, tmp_path, caplog):
+        # A title comes from an upload: a newline in it must not forge a log line.
+        scan = _variant(
+            self.FIX / "scc_embedded_results.xml", tmp_path / "scan.xml",
+            {"<cdf:title>Microsoft Windows 11 STIG SCAP Benchmark</cdf:title>":
+             "<cdf:title>Win11&#10;ERROR forged line</cdf:title>"},
+        )
+        caplog.set_level(logging.INFO)
+        rc = main(["report", "--results", str(scan),
+                   "--references", str(self.FIX / "manual_stig_win11.xml"), "--output", str(tmp_path / "r.xlsx")])
+        assert rc == 0
+        line = next(r.getMessage() for r in caplog.records
+                    if r.name == "app.cli" and "check text filled" in r.getMessage())
+        assert line.startswith("Win11\\nERROR forged line — check text filled: 2"), line
+        assert "\n" not in line
+
+    def test_same_folder_as_results_and_references_reads_each_file_once(self, tmp_path, caplog):
+        import shutil
+        folder = tmp_path / "session"
+        folder.mkdir()
+        for name in ("scc_embedded_results.xml", "manual_stig_win11.xml"):
+            shutil.copy(self.FIX / name, folder / name)
+        out = tmp_path / "r.xlsx"
+        caplog.set_level(logging.INFO)
+        rc = main(["report", "--results", str(folder), "--references", str(folder), "--output", str(out)])
+        assert rc == 0
+        ws = self._findings_sheet(out)
+        assert ws.max_row == 4, "three findings, not six"
+        assert ws["K2"].value == "Check: manual_stig_win11.xml V2R9 | Fix: scanner"
+        assert self._source_rows(out) == ["manual_stig_win11.xml", "scc_embedded_results.xml"]
+        messages = [r.getMessage() for r in caplog.records if r.name == "app.cli"]
+        assert messages.count(_SUMMARY_LINE) == 1, messages
+        assert not any("identical to" in m or "same host and results as" in m for m in messages), messages
+
+    def test_an_extracted_scap_bundle_in_a_reference_library_gives_one_support_line(self, tmp_path, caplog):
+        # DISA's SCAP bundle unzipped into a library folder: the XCCDF is used (here it carries the
+        # Manual STIG's text, so check text fills); OVAL, CPE and OCIL are named once, never as a
+        # benchmark that could not be parsed.
+        import shutil
+        stem = "U_MS_Windows_11_V2R9_STIG_SCAP_1-3_Benchmark"
+        bundle = tmp_path / "library" / "windows" / stem
+        bundle.mkdir(parents=True)
+        shutil.copy(self.FIX / "manual_stig_win11.xml", bundle / f"{stem}-xccdf.xml")
+        oval = "<oval_definitions xmlns='http://oval.mitre.org/XMLSchema/oval-definitions-5'/>"
+        for suffix, text in (("-oval.xml", oval), ("-cpe-oval.xml", oval.replace("/>", " id='cpe'/>")),
+                             ("-cpe-dictionary.xml", "<cpe-list xmlns='http://cpe.mitre.org/dictionary/2.0'/>"),
+                             ("-ocil.xml", "<ocil xmlns='http://scap.nist.gov/schema/ocil/2.0'/>")):
+            (bundle / f"{stem}{suffix}").write_text(text, encoding="utf-8")
+        out = tmp_path / "r.xlsx"
+        caplog.set_level(logging.INFO)
+        rc = main(["report", "--results", str(self.FIX / "scc_embedded_results.xml"),
+                   "--references", str(tmp_path / "library"), "--output", str(out)])
+        assert rc == 0
+        assert self._findings_sheet(out)["K2"].value == f"Check: {stem}-xccdf.xml V2R9 | Fix: scanner"
+        messages = [r.getMessage() for r in caplog.records if r.name == "app.cli"]
+        assert not any("Could not parse" in m for m in messages), messages
+        assert [m for m in messages if "SCAP support" in m] == [
+            "4 SCAP support file(s) (OVAL, CPE, OCIL, stylesheets) were not used: "
+            f"{stem}-cpe-dictionary.xml, {stem}-cpe-oval.xml, {stem}-ocil.xml, {stem}-oval.xml"]
+
+    def test_delta_accepts_references(self, tmp_path, caplog):
+        out = tmp_path / "d.xlsx"
+        scc = str(self.FIX / "scc_embedded_results.xml")
+        caplog.set_level(logging.INFO)
+        rc = main(["delta", "--baseline", scc, "--current", scc,
+                   "--references", str(self.FIX / "manual_stig_win11.xml"), "--output", str(out)])
+        assert rc == 0
+        ws = self._findings_sheet(out)
+        headers = [c.value for c in ws[1]]
+        assert "Text Source" in headers
+        source = headers.index("Text Source") + 1
+        assert {ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)} == {"Persisting"}
+        assert ws.cell(row=2, column=source).value == "Check: manual_stig_win11.xml V2R9 | Fix: scanner"
+        assert any("Reference files: 1" in r.getMessage() for r in caplog.records if r.name == "app.cli")
+
+    def test_delta_takes_the_benchmarks_alias_and_checks_its_paths(self, tmp_path, caplog):
+        scc = str(self.FIX / "scc_embedded_results.xml")
+        with caplog.at_level(logging.ERROR, logger="app.cli"):
+            rc = main(["delta", "--baseline", scc, "--current", scc,
+                       "--benchmarks", str(tmp_path / "missing.xml"), "--output", str(tmp_path / "d.xlsx")])
+        assert rc == 1
+        assert any("missing.xml" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# What the CLI prints: one line per record, UTF-8
+# ---------------------------------------------------------------------------
+
+def _no_raw_break(messages: list[str]) -> bool:
+    return not any("\n" in m or "\r" in m for m in messages)
+
+
+class TestLogLinesCannotBeForged:
+    """Warnings carry titles and host names from uploads. A line break in one must not
+    start a line of its own in the CLI's output."""
+
+    def _forging_reference(self, tmp_path: Path) -> Path:
+        # The Server 2022 Manual STIG against the Windows 11 scan: the wrong-product warning
+        # names the reference by its title.
+        return _variant(
+            FIXTURES / "manual_stig_server2022.xml", tmp_path / "ref.xml",
+            {"<title>Microsoft Windows Server 2022 Security Technical Implementation Guide</title>":
+             "<title>Server 2022&#10;ERROR  app.cli  forged&#13;line</title>"},
+        )
+
+    def test_report_warnings_are_one_line_each(self, tmp_path, caplog):
+        caplog.set_level(logging.INFO)
+        rc = main(["report", "--results", str(FIXTURES / "scc_embedded_results.xml"),
+                   "--references", str(self._forging_reference(tmp_path)), "--output", str(tmp_path / "r.xlsx")])
+        assert rc == 0
+        warnings = [r.getMessage() for r in caplog.records if r.name == "app.cli" and r.levelno == logging.WARNING]
+        assert _no_raw_break(warnings), warnings
+        wrong = [w for w in warnings if "wrong product or STIG?" in w]
+        assert len(wrong) == 1 and "(loaded: Server 2022\\nERROR  app.cli  forged\\rline V2R8)" in wrong[0], wrong
+
+    def test_delta_warnings_are_one_line_each(self, tmp_path, caplog):
+        caplog.set_level(logging.INFO)
+        scc = str(FIXTURES / "scc_embedded_results.xml")
+        rc = main(["delta", "--baseline", scc, "--current", scc,
+                   "--references", str(self._forging_reference(tmp_path)), "--output", str(tmp_path / "d.xlsx")])
+        assert rc == 0
+        warnings = [r.getMessage() for r in caplog.records if r.name == "app.cli" and r.levelno == logging.WARNING]
+        assert _no_raw_break(warnings), warnings
+        assert [w for w in warnings if "wrong product" in w and w.startswith("Both scan sets: ")]
+
+    @pytest.mark.parametrize("command", ["report", "delta"])
+    def test_warnings_and_the_error_of_a_failed_run_are_one_line_each(self, tmp_path, caplog, monkeypatch, command):
+        import app.cli as cli
+        from app.core.pipeline import PipelineError
+
+        def fail(*_args, **_kwargs):
+            raise PipelineError("No rule results\nERROR forged", warnings=["a.xml: title\r\nWARNING forged"])
+
+        monkeypatch.setattr(cli, "parse_stage", fail)
+        scc = str(FIXTURES / "scc_embedded_results.xml")
+        argv = (["report", "--results", scc] if command == "report"
+                else ["delta", "--baseline", scc, "--current", scc]) + ["--output", str(tmp_path / "o.xlsx")]
+        caplog.set_level(logging.INFO)
+        assert main(argv) == 1
+        printed = [r.getMessage() for r in caplog.records if r.name == "app.cli" and r.levelno >= logging.WARNING]
+        assert _no_raw_break(printed), printed
+        assert any(m.endswith("a.xml: title\\r\\nWARNING forged") for m in printed), printed
+        assert any(m.endswith("No rule results\\nERROR forged") for m in printed), printed
+
+
+def test_main_writes_its_log_as_utf8(tmp_path, monkeypatch):
+    """Redirected on Windows, stderr would be cp1252 and an em-dash or ellipsis would
+    arrive garbled; main makes it UTF-8 before it sets up logging."""
+    import io
+    import sys
+    buffer = io.BytesIO()
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(buffer, encoding="cp1252"))
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert main(["report", "--results", str(empty), "--output", str(tmp_path / "r.xlsx")]) == 1
+    assert (sys.stderr.encoding, sys.stderr.errors) == ("utf-8", "backslashreplace")
+    sys.stderr.write("— …")
+    sys.stderr.flush()
+    assert buffer.getvalue().endswith("— …".encode("utf-8"))
+
+
+@pytest.mark.parametrize("command", ["report", "delta"])
+def test_an_export_error_is_printed_on_one_line(tmp_path, caplog, monkeypatch, command):
+    # The error can carry upload-derived text (openpyxl quotes the refused value); an escape
+    # sequence or line break in it must not reach the terminal raw.
+    import app.cli as cli
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("value WIN\x1b[31m-01\nERROR  app.cli  forged cannot be used")
+
+    monkeypatch.setattr(cli, "export_stage" if command == "report" else "export_delta_stage", fail)
+    scc = str(FIXTURES / "scc_embedded_results.xml")
+    argv = ["report", "--results", scc] if command == "report" else ["delta", "--baseline", scc, "--current", scc]
+    caplog.set_level(logging.INFO)
+    assert main([*argv, "--output", str(tmp_path / "o.xlsx")]) == 1
+    errors = [r.getMessage() for r in caplog.records if r.name == "app.cli" and r.levelno == logging.ERROR]
+    assert errors == ["Export failed: value WIN\\x1b[31m-01\\nERROR  app.cli  forged cannot be used"], errors
+
+
+@pytest.mark.parametrize("target, title", [
+    ("WIN-SERVER-01", "Windows Server 2022 STIG\u0007"),       # a BEL in the STIG title
+    ("WIN\u001b[31m-01", "Windows Server 2022 STIG"),          # an escape sequence in the host name
+])
+def test_a_control_character_in_a_checklist_host_or_title_does_not_stop_the_export(tmp_path, target, title):
+    import json
+    doc = json.loads((FIXTURES / "evaluate_stig_checklist.cklb").read_text(encoding="utf-8-sig"))
+    doc["target_data"]["host_name"] = target
+    doc["stigs"][0]["display_name"] = title
+    checklist = tmp_path / "checklist.cklb"
+    checklist.write_text(json.dumps(doc), encoding="utf-8")
+    out = tmp_path / "r.xlsx"
+    assert main(["report", "--results", str(checklist), "--output", str(out)]) == 0
+    findings = load_workbook(out)["Findings"]
+    assert findings["F2"].value == target.replace("\u001b", "\ufffd")
+    assert findings["A2"].value == title.replace("\u0007", "\ufffd")
+
+
+def test_a_lone_surrogate_in_a_checklist_does_not_stop_the_export(tmp_path):
+    import json
+    doc = json.loads((FIXTURES / "evaluate_stig_checklist.cklb").read_text(encoding="utf-8-sig"))
+    doc["stigs"][0]["rules"][0]["check_content"] = "before \ud800 after"
+    checklist = tmp_path / "checklist.cklb"
+    checklist.write_text(json.dumps(doc), encoding="utf-8")          # written as the escape \ud800
+    out = tmp_path / "r.xlsx"
+    assert main(["report", "--results", str(checklist), "--output", str(out)]) == 0
+    assert "before \ufffd after" in [c.value for c in load_workbook(out)["Findings"]["H"]]
+
+
+# --- each problem is printed once: a log line the run restates is not printed as well ---------------------
+
+def _run_cli_on_broken_files(tmp_path, *extra: str) -> list[str]:
+    """Run the CLI as the operator does, in its own process (inside pytest the root logger
+    already has a handler, so the CLI's own would not be installed), over a good scan and
+    one broken file of each kind; its stderr lines."""
+    import subprocess
+    import sys
+
+    from tests.test_web import broken_uploads
+    results, references = broken_uploads()
+    folder = tmp_path / "in"
+    folder.mkdir()
+    for name, payload in (*results, *references):
+        (folder / name).write_bytes(payload)
+    argv = [sys.executable, "-m", "app.cli", "report",
+            "--results", str(FIXTURES / "scc_embedded_results.xml"), *(str(folder / n) for n, _ in results),
+            "--references", *(str(folder / n) for n, _ in references),
+            "--output", str(tmp_path / "out.xlsx"), *extra]
+    done = subprocess.run(argv, capture_output=True, cwd=Path(__file__).parent.parent, timeout=120)
+    assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+    return done.stderr.decode("utf-8").splitlines()
+
+
+def test_the_cli_prints_each_problem_once_with_its_reason(tmp_path):
+    from tests.test_web import expected_reasons
+    lines = _run_cli_on_broken_files(tmp_path)
+    for name, line in expected_reasons(tmp_path).items():
+        assert [out for out in lines if name in out] == [f"WARNING  app.cli  {line}"], (name, lines)
+
+
+# Every kind of problem (tests/problem_cases.py), the CLI run in this process: what it prints at
+# WARNING is every WARNING record (the CLI's handler prints them all), here captured by caplog.
+from tests.problem_cases import GOOD as CASE_GOOD, problem_cases  # noqa: E402
+
+_CASES = problem_cases()
+
+
+@pytest.mark.parametrize("case", _CASES, ids=[case.id for case in _CASES])
+def test_the_cli_shows_each_problem_once(case, tmp_path, monkeypatch, caplog):
+    import app.utils.zip_extract as zip_extract
+    for name, value in case.patches.items():
+        monkeypatch.setattr(zip_extract, name, value)
+    folder = tmp_path / "in"
+    folder.mkdir()
+    results, references = [str(CASE_GOOD)], []
+    for zone, name, payload in case.files:
+        (folder / name).write_bytes(payload)
+        (results if zone == "results" else references).append(str(folder / name))
+    argv = ["report", "--results", *results, "--output", str(tmp_path / "out.xlsx")]
+    if references:
+        argv += ["--references", *references]
+    with caplog.at_level(logging.WARNING):
+        assert main(argv) == 0
+    printed = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert [line for line in printed if case.subject in line] == case.shown
+
+
+def test_the_report_workbook_carries_the_runs_warnings(tmp_path):
+    from tests.test_excel_exporter import run_warning_rows
+    broken = tmp_path / "broken.xml"
+    broken.write_text("<TestResult><a></TestResult>", encoding="utf-8")
+    out = tmp_path / "out.xlsx"
+    assert main(["report", "--results", str(FIXTURES / "scc_embedded_results.xml"), str(broken),
+                 "--output", str(out)]) == 0
+    assert any(r.startswith("Could not parse results file: broken.xml — invalid XML") for r in run_warning_rows(out))
+
+
+def test_help_is_printed_in_utf8_when_stdout_is_redirected():
+    # Redirected on Windows, stdout is in the ANSI code page: an em-dash came out as a stray byte.
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    done = subprocess.run([sys.executable, "-m", "app.cli", "report", "--help"], capture_output=True,
+                          cwd=Path(__file__).parent.parent, env=env, timeout=60)
+    assert done.returncode == 0
+    assert "fix text only — add the Manual STIG" in done.stdout.decode("utf-8")

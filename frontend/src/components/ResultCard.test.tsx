@@ -28,6 +28,14 @@ describe('ResultCard (success)', () => {
     expect(screen.getByText('10')).toBeInTheDocument();
   });
 
+  it('says the file count counts the result files read', () => {
+    render(
+      <ResultCard status="complete" summary={SUMMARY} warnings={[]} error={null}
+                  ai={null} aiError={null} onDownload={vi.fn()} onReset={vi.fn()} />,
+    );
+    expect(screen.getByText('Result files read')).toBeInTheDocument();
+  });
+
   it('explains a zero-CAT summary rather than leaving it puzzling', () => {
     render(
       <ResultCard status="complete" summary={{ ...SUMMARY, cat1: 0, cat2: 0, cat3: 0 }}

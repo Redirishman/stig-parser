@@ -5,6 +5,7 @@ Routes (REST API proxy integration):
     GET  /config                 -> AI gate + upload limits (the client needs
                                     both BEFORE it can render or validate)
     POST /uploads                -> create a job, return presigned PUT urls
+                                    (``referenceFilenames`` marks STIG references)
     POST /jobs                   -> start the Step Functions execution
     GET  /jobs/{job_id}          -> job status record
     GET  /jobs/{job_id}/result   -> presigned GET url for report.xlsx
@@ -37,6 +38,11 @@ from app.lambdas import common
 log = logging.getLogger(__name__)
 
 PRESIGN_EXPIRY_SECONDS = 900
+# The file names of one upload, in bytes as the job record stores them (JSON,
+# which escapes non-ASCII). A job record is one DynamoDB item (400 KB at most)
+# and keeps the names three times (input_filenames, reference_filenames, the
+# launch input), beside at most 200,000 bytes of warnings (app.core.stages).
+_MAX_FILENAME_BYTES = 32_000
 
 # Gate-transparency values for the job record's `ai` field (spec §4.1). The UI
 # reports which of these applies, so AI being off is never silent.
@@ -248,6 +254,8 @@ def _execution_input(job_id: str, record: dict, ai_enabled: bool) -> str:
         {
             "jobId": job_id,
             "inputFilenames": record.get("input_filenames", []),
+            # Which of them are STIG references; a job created before the hint has none.
+            "referenceFilenames": record.get("reference_filenames", []),
             "aiEnabled": ai_enabled,
         },
         sort_keys=True,
@@ -295,14 +303,37 @@ def _stop_late_cancelled_execution(sfn, job_id: str) -> None:
 
 
 def _post_uploads(event: dict) -> dict:
-    filenames = _body(event).get("filenames") or []
+    body = _body(event)
+    filenames = body.get("filenames") or []
     if not isinstance(filenames, list) or not filenames:
         return _response(400, {"error": "Provide a non-empty 'filenames' list."})
 
+    if len(json.dumps([str(n) for n in filenames])) > _MAX_FILENAME_BYTES:
+        return _response(400, {
+            "error": f"The file names of one upload may add up to at most {_MAX_FILENAME_BYTES:,} bytes "
+                     "— upload fewer files at a time.",
+        })
     for name in filenames:
         rejection = reject_filename(str(name))
         if rejection:
             return _response(400, {"error": rejection})
+    # Each upload is stored under its file name, and the web client matches the
+    # upload URLs to its files by name: two files with one name would become one.
+    seen: set[str] = set()
+    for name in map(str, filenames):
+        if name in seen:
+            return _response(400, {"error": f"Two files are named {name!r} — rename one so that both are read."})
+        seen.add(name)
+    # The files the operator supplied as STIG references. Routing is by content;
+    # the hint decides only the slot a file starts in (a checklist there is a
+    # reference, not a scan), so it may name only files of this upload.
+    reference_filenames = body.get("referenceFilenames") or []
+    if not isinstance(reference_filenames, list) or any(
+        not isinstance(name, str) or name not in seen for name in reference_filenames
+    ):
+        return _response(
+            400, {"error": "referenceFilenames must be a list of names from 'filenames'."}
+        )
 
     job_id = str(uuid.uuid4())
     uploads = common.upload_store()
@@ -321,6 +352,7 @@ def _post_uploads(event: dict) -> dict:
         status="pending",
         progress="Awaiting upload…",
         input_filenames=[str(n) for n in filenames],
+        reference_filenames=list(dict.fromkeys(reference_filenames)),
         submitted_by=_identity(event),
     )
     return _response(201, {"jobId": job_id, "uploads": urls})

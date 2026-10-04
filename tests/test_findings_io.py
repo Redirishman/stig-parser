@@ -40,3 +40,17 @@ def test_from_json_ignores_unknown_keys():
               '"fix_text":"f","future_field":"x"}]'
     restored = findings_from_json(payload)
     assert restored[0].vuln_id == "V-1"
+
+
+def test_new_finding_fields_round_trip_and_old_payloads_load():
+    import json
+    from app.core.findings_io import findings_from_json, findings_to_json
+    from app.parsers.base import Finding
+
+    f = Finding("T", "V-1", "SV-1r1_rule", "CAT I", "Open", "h", "1.1.1.1", "c", "x",
+                stig_id="WN11-00-000150", text_source="Check and fix: scanner", scan_release="V2R8")
+    assert findings_from_json(findings_to_json([f]))[0] == f
+    old = json.dumps([{"stig_title": "T", "vuln_id": "V-1", "rule_id": "r", "severity": "CAT I",
+                       "status": "Open", "server": "h", "ip_address": "i", "check_text": "c", "fix_text": "x"}])
+    loaded = findings_from_json(old)[0]
+    assert (loaded.stig_id, loaded.text_source, loaded.scan_release) == ("", "", "")

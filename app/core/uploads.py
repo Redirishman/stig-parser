@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Defined with the archive reader's limits, which must not import from here.
+from app.limits import MAX_UPLOAD_BYTES
+
+__all__ = ["ALLOWED_UPLOAD_EXT", "MAX_UPLOAD_BYTES", "is_safe_name", "reject_filename", "reject_size"]
+
 # Results accept XCCDF (.xml), CKLB checklists (.cklb), and Nessus compliance
 # scans (.nessus); benchmarks accept .xml and DISA .zip bundles.
 ALLOWED_UPLOAD_EXT = {".xml", ".zip", ".cklb", ".nessus"}
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # per file
 
 _ALLOWED_DISPLAY = ", ".join(sorted(ALLOWED_UPLOAD_EXT))
 

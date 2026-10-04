@@ -136,9 +136,9 @@ export default function App() {
           <h1>STIG Compliance Parser</h1>
         </div>
         <p className="subtitle">
-          Upload scan results to generate a consolidated findings report. SCC,
-          Evaluate-STIG, and Nessus files are self-contained — no separate
-          benchmark upload needed.
+          Upload scan results to generate a consolidated findings report. Add the
+          Manual STIG as a reference to include check text — SCC results carry fix
+          text only.
         </p>
       </header>
 
@@ -155,18 +155,18 @@ export default function App() {
               <UploadZone
                 id="results"
                 title="Scan Results"
-                description="XCCDF results from SCC or OpenSCAP (.xml), Evaluate-STIG / STIG Viewer checklists (.cklb), or Nessus compliance scans (.nessus)"
-                accept=".xml,.cklb,.nessus"
+                description="XCCDF results from SCC or OpenSCAP (.xml), Evaluate-STIG / STIG Viewer checklists (.cklb), or Nessus compliance scans (.nessus). A ZIP is read as a folder."
+                accept=".xml,.zip,.cklb,.nessus"
                 limits={config}
                 files={results}
                 onChange={setResults}
               />
               <UploadZone
                 id="benchmarks"
-                title="STIG Benchmarks"
-                badge="Optional for SCC"
-                description="STIG benchmark XML or ZIP files from DISA (public.cyber.mil). Not needed when uploading SCC result files."
-                accept=".xml,.zip"
+                title="STIG References"
+                badge="Optional"
+                description="Manual STIG ZIPs add check text. Accepts DISA STIG ZIP or Manual XCCDF (.xml), SCAP benchmarks, and STIG Viewer checklists (.cklb). SCC results carry fix text only. A ZIP is read as a folder."
+                accept=".xml,.zip,.cklb"
                 limits={config}
                 files={benchmarks}
                 onChange={setBenchmarks}
@@ -185,7 +185,7 @@ export default function App() {
                 type="button"
                 className="btn btn-primary"
                 disabled={results.length === 0}
-                onClick={() => void submit([...results, ...benchmarks], ai)}
+                onClick={() => void submit([...results, ...benchmarks], ai, benchmarks.map((f) => f.name))}
               >
                 Process
               </button>

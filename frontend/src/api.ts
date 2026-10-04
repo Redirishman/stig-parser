@@ -49,10 +49,16 @@ export function getConfig(): Promise<Config> {
   return request<Config>('/config');
 }
 
-export function createUploads(filenames: string[]): Promise<UploadsResponse> {
+export function createUploads(
+  filenames: string[],
+  referenceFilenames: string[] = [],
+): Promise<UploadsResponse> {
+  // referenceFilenames marks which uploads are STIG references. The server routes
+  // by content; the hint only makes a checklist a reference instead of a scan.
+  const body = referenceFilenames.length > 0 ? { filenames, referenceFilenames } : { filenames };
   return request<UploadsResponse>('/uploads', {
     method: 'POST',
-    body: JSON.stringify({ filenames }),
+    body: JSON.stringify(body),
   });
 }
 

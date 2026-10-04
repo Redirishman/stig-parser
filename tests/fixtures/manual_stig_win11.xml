@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated DISA Manual STIG in its real shape: XCCDF 1.1, short group and rule
+  IDs (no xccdf_ prefix), inline check-content. One release newer than the scan
+  fixture, so one rule revision differs. Text is representative but synthetic.
+-->
+<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.1" id="MS_Windows_11_STIG" xml:lang="en">
+  <status date="2026-07-01">accepted</status>
+  <title>Microsoft Windows 11 Security Technical Implementation Guide</title>
+  <plain-text id="release-info">Release: 9 Benchmark Date: 01 Jul 2026</plain-text>
+  <version>2</version>
+
+  <Group id="V-253284">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <Rule id="SV-253284r958928_rule" severity="high" weight="10.0">
+      <version>WN11-00-000150</version>
+      <title>Structured Exception Handling Overwrite Protection (SEHOP) must be enabled.</title>
+      <fixtext fixref="F-56737r958927_fix">Configure DisableExceptionChainValidation (REG_DWORD) to 0.</fixtext>
+      <fix id="F-56737r958927_fix"/>
+      <check system="C-56787r958926_chk">
+        <check-content-ref href="Microsoft_Windows_11_STIG.xml" name="M"/>
+        <check-content>Verify the registry value DisableExceptionChainValidation is 0. If it is not, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <Group id="V-253285">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <Rule id="SV-253285r991589_rule" severity="medium" weight="10.0">
+      <version>WN11-00-000160</version>
+      <title>The Server Message Block (SMB) v1 protocol must be disabled on the system.</title>
+      <fixtext fixref="F-56738r991588_fix">Uninstall the SMB 1.0/CIFS File Sharing Support feature.</fixtext>
+      <fix id="F-56738r991588_fix"/>
+      <check system="C-56788r991587_chk">
+        <check-content-ref href="Microsoft_Windows_11_STIG.xml" name="M"/>
+        <check-content>Run Get-WindowsOptionalFeature for SMB1Protocol. If State is Enabled, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+
+  <Group id="V-253287">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <Rule id="SV-253287r958934_rule" severity="medium" weight="10.0">
+      <version>WN11-00-000175</version>
+      <title>The Secondary Logon service must be disabled.</title>
+      <fixtext fixref="F-56740r958933_fix">Set the Secondary Logon service Startup Type to Disabled.</fixtext>
+      <fix id="F-56740r958933_fix"/>
+      <check system="C-56790r958932_chk">
+        <check-content-ref href="Microsoft_Windows_11_STIG.xml" name="M"/>
+        <check-content>Verify the Secondary Logon service is Disabled and not running. If it is not, this is a finding.</check-content>
+      </check>
+    </Rule>
+  </Group>
+</Benchmark>

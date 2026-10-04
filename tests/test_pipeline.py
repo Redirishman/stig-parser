@@ -62,8 +62,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_parse_stage_happy_path_yields_findings(tmp_path):
     fixture = FIXTURES / "scc_results.xml"
     assert fixture.exists(), f"missing fixture: {fixture}"
-    # benchmark_paths=[] also exercises the "no benchmarks supplied → use
-    # results files as benchmarks" fallback branch.
+    # No references supplied: the results file is read against whatever
+    # benchmark it embeds (this fixture embeds none).
     result = parse_stage([fixture], [], tmp_path / "e")
     assert isinstance(result, ParseResult)
     assert result.source_file_count == 1
@@ -130,7 +130,7 @@ def test_parse_stage_raises_pipelineerror_when_no_results_parse(tmp_path):
     with pytest.raises(PipelineError) as exc:
         parse_stage(
             results_paths=[bad],
-            benchmark_paths=[],
+            reference_paths=[],
             extract_dir=tmp_path / "extract",
         )
     assert "results" in str(exc.value).lower()
@@ -251,7 +251,7 @@ def test_parse_stage_zero_rule_result_scan_is_warned_and_not_covered(tmp_path):
     result = parse_stage([good, empty], [], tmp_path / "e", allow_empty=True)
     assert {server for server, _ in result.coverage} == {"HOST-A"}
     assert any(
-        w.startswith("empty.xml: 0 rule results") and "--benchmarks" in w
+        w.startswith("empty.xml: 0 rule results") and "pass it as a reference" in w
         for w in result.warnings
     ), result.warnings
 
@@ -338,7 +338,7 @@ def test_parse_stage_progress_cb_reports_per_file(tmp_path):
     a = tmp_path / "a.xml"
     b = tmp_path / "b.xml"
     a.write_text("<x/>", encoding="utf-8")
-    b.write_text("<x/>", encoding="utf-8")
+    b.write_text("<y/>", encoding="utf-8")     # not byte-identical: a file supplied twice is read once
     msgs = []
 
     # Two unparseable results files still emit a progress line each before the
@@ -348,3 +348,66 @@ def test_parse_stage_progress_cb_reports_per_file(tmp_path):
 
     assert any("1 of 2" in m for m in msgs)
     assert any("2 of 2" in m for m in msgs)
+
+
+def test_a_partly_titled_benchmark_less_scan_keeps_its_blank_pair():
+    # _scan_coverage on its own: the pipeline adds every finding's own pair afterwards, which
+    # would hide a scan losing its blank pair while one of its rows is still untitled.
+    from app.core.pipeline import _ResultsFile, _scan_coverage
+
+    def row(title: str) -> Finding:
+        return Finding(title, "V-1", "SV-1r1_rule", "CAT II", "Open", "HOST-A", "10.0.0.1", "c", "f")
+
+    partly = _ResultsFile("scan.xml", 0, rows=[row("Win STIG"), row("")])
+    assert _scan_coverage([partly], [("HOST-A", "")]) == {("HOST-A", "")}
+    titled = _ResultsFile("scan.xml", 0, rows=[row("Win STIG"), row("Win STIG")])
+    assert _scan_coverage([titled], [("HOST-A", "")]) == {("HOST-A", "Win STIG")}
+
+
+# --- each file is parsed once; parsing is bounded ------------------------------------------
+
+_FIX = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def xml_parses(monkeypatch):
+    """How many times the full XML parse reads each file, by name."""
+    from collections import Counter
+
+    from lxml import etree
+    seen: Counter = Counter()
+    real = etree.parse
+
+    def spy(source, *args, **kwargs):
+        seen[Path(str(source)).name] += 1
+        return real(source, *args, **kwargs)
+
+    monkeypatch.setattr(etree, "parse", spy)
+    return seen
+
+
+def test_each_xml_file_is_parsed_once(tmp_path, xml_parses):
+    result = parse_stage([_FIX / "scc_embedded_results.xml", _FIX / "nessus_compliance.nessus"],
+                         [_FIX / "manual_stig_win11.xml", _FIX / "scap_datastream_win11.xml"], tmp_path)
+    assert result.findings
+    assert dict(xml_parses) == {"scc_embedded_results.xml": 1, "nessus_compliance.nessus": 1,
+                                "manual_stig_win11.xml": 1, "scap_datastream_win11.xml": 1}
+
+
+def test_a_file_with_too_many_elements_is_named_and_not_parsed(tmp_path, monkeypatch, xml_parses):
+    import app.utils.parse_cost as parse_cost
+    monkeypatch.setattr(parse_cost, "MAX_FILE_ELEMENTS", 100)      # the SCC fixture holds 124 (elements and attributes)
+    result = parse_stage([_FIX / "evaluate_stig_results.xml", _FIX / "scc_embedded_results.xml"], [], tmp_path)
+    assert "scc_embedded_results.xml: too many elements to parse safely — not read" in result.warnings
+    assert "scc_embedded_results.xml" not in xml_parses
+    assert result.source_file_count == 1
+
+
+def test_the_run_has_one_budget_of_elements(tmp_path, monkeypatch, xml_parses):
+    import app.utils.parse_cost as parse_cost
+    monkeypatch.setattr(parse_cost, "MAX_RUN_ELEMENTS", 200)       # 46 + 124 fit; 69 more do not
+    result = parse_stage([_FIX / "evaluate_stig_results.xml", _FIX / "scc_embedded_results.xml"],
+                         [_FIX / "manual_stig_win11.xml"], tmp_path)
+    assert ("manual_stig_win11.xml: not read — the parse limit for one run was reached; any scan results or "
+            "STIG references in it are missing from this report") in result.warnings
+    assert "manual_stig_win11.xml" not in xml_parses

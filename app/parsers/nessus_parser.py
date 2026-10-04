@@ -18,7 +18,15 @@ from pathlib import Path
 
 from lxml import etree
 
-from app.parsers.base import BaseParser, Finding
+from app.parsers.base import BaseParser, Finding, RowLog
+from app.reference.normalize import (
+    MAX_SHOWN_CHARS,
+    MAX_STORED_CHARS,
+    clip,
+    error_text,
+    norm_stig_id,
+    safe_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -101,39 +109,41 @@ def _host_metadata(report_host: etree._Element) -> tuple[str, str]:
 class NessusComplianceParser(BaseParser):
     """Parse a .nessus compliance scan into a list of Findings."""
 
-    def parse(self, path: Path) -> list[Finding] | None:
-        """Parse *path* and return its compliance findings.
+    def read(self, path: Path, *, name: str | None = None) -> tuple[list[Finding] | None, str]:
+        """Parse *path*: ``(findings, "")``, or ``(None, why)`` when it is not a
+        Nessus export, *why* fit for the operator's warning. What it returns is
+        not logged: the caller reports it.
 
         Returns None (with a logged warning) when the file is not a
         NessusClientData_v2 document, so the pipeline surfaces a per-file
         warning instead of silently emitting nothing.
+
+        *name* is what to call the file in messages (and what to fall back on
+        for the host name) when that is not the path's own name: an archive
+        member is extracted under a generated file name.
         """
+        name = name or path.name
         try:
             tree = _safe_xml_parse(path)
         except etree.XMLSyntaxError as exc:
-            log.warning("Skipping %s — invalid XML: %s", path.name, exc)
-            return None
+            return None, f"invalid XML: {error_text(exc)}"
 
         root = tree.getroot()
         if etree.QName(root.tag).localname != "NessusClientData_v2":
-            log.warning(
-                "%s: root element is <%s>, expected <NessusClientData_v2> — "
-                "not a Nessus export",
-                path.name,
-                etree.QName(root.tag).localname,
-            )
-            return None
+            found = safe_name(etree.QName(root.tag).localname, MAX_SHOWN_CHARS)
+            return None, f"not a Nessus export (root element is <{found}>, expected <NessusClientData_v2>)"
 
         findings: list[Finding] = []
         compliance_items = 0
+        row_log = RowLog(log)
 
         for report_host in root.iter("ReportHost"):
             hostname, ip = _host_metadata(report_host)
             if not hostname:
-                hostname = path.stem
-                log.warning(
+                hostname = Path(name).stem
+                row_log(
                     "%s: ReportHost with no name/fqdn — using filename '%s'",
-                    path.name,
+                    name,
                     hostname,
                 )
 
@@ -146,11 +156,11 @@ class NessusComplianceParser(BaseParser):
                 status = _RESULT_MAP.get(raw_result.upper())
                 if status is None:
                     # Fail loud, not silent: keep the item visible in the report
-                    log.warning(
+                    row_log(
                         "%s: compliance item with unrecognised result '%s' — "
                         "recording as 'Unknown' so it is not silently dropped",
-                        path.name,
-                        raw_result or "(missing)",
+                        name,
+                        safe_name(raw_result) or "(missing)",
                     )
                     status = "Unknown"
 
@@ -203,15 +213,10 @@ class NessusComplianceParser(BaseParser):
                         fix_text=(
                             item.findtext(_CM + "compliance-solution") or ""
                         ).strip(),
+                        # Set whenever the token exists, so it is also set when the
+                        # STIG ID stands in for a missing Rule-ID above.
+                        stig_id=clip(norm_stig_id(tokens.get("STIG-ID", "")), MAX_STORED_CHARS),
                     )
                 )
 
-        if compliance_items == 0:
-            log.warning(
-                "%s: no Policy Compliance items found — this looks like a "
-                "vulnerability scan, not a compliance scan. Re-run the scan "
-                "with a compliance/audit policy to get STIG results.",
-                path.name,
-            )
-
-        return findings
+        return findings, ""

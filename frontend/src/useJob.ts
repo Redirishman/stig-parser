@@ -223,7 +223,8 @@ export function useJob() {
   );
 
   const submit = useCallback(
-    async (files: File[], ai: boolean) => {
+    /** `referenceNames`: the names among `files` the operator added as STIG references. */
+    async (files: File[], ai: boolean, referenceNames: string[] = []) => {
       const controller = new AbortController();
       submitAbort.current = controller;
       const { signal } = controller;
@@ -236,7 +237,7 @@ export function useJob() {
         uploadProgress: Object.fromEntries(files.map((f) => [f.name, 0])),
       });
       try {
-        const { jobId, uploads } = await api.createUploads(files.map((f) => f.name));
+        const { jobId, uploads } = await api.createUploads(files.map((f) => f.name), referenceNames);
         if (signal.aborted) return;
         setState((s) => ({ ...s, jobId }));
         localStorage.setItem(STORAGE_KEY, jobId);
