@@ -164,7 +164,7 @@ in the template. Deferred to a separate commit after CLI ships.
 
 ## Revision 2 — 2026-09-28: coverage is per host and STIG, taken from the scans
 
-**Why.** Live run on a real SCC session (one host, seven STIGs, 322 Open findings): a current set that omitted two of the seven STIG scans, with nothing fixed, produced **90 Resolved** and exit 0 with no warning. Two independent reviews found the same root cause: host coverage is derived from the *actionable finding lists*, so a host or STIG with no findings left is invisible, and a STIG that was not re-scanned looks identical to one that was fully remediated. The same defect makes a fully remediated host disappear from the report as "not re-scanned", contradicting §Error handling ("all remediated → all Resolved").
+**Why.** Live run on a real SCC session (the maintainer's own scan data, verified locally and never committed): a current set that omitted some of the STIG scans, with nothing fixed, reported every finding of the omitted STIGs as **Resolved** and exited 0 with no warning. Two independent reviews found the same root cause: host coverage is derived from the *actionable finding lists*, so a host or STIG with no findings left is invisible, and a STIG that was not re-scanned looks identical to one that was fully remediated. The same defect makes a fully remediated host disappear from the report as "not re-scanned", contradicting §Error handling ("all remediated → all Resolved").
 
 **Decisions (supersede §2 "Matching logic" and the host-level coverage bullets).**
 
@@ -182,4 +182,4 @@ in the template. Deferred to a separate commit after CLI ships.
 
 **Recorded as built (undocumented until now):** two-pass identity match with host-name normalisation; Baseline Status / Current Status split; `export()` shares the findings-sheet writer with `export_delta()` and its output is unchanged.
 
-**Acceptance on the real session:** same set both sides → 322 Persisting; current adds two STIG scans → 90 Newly scanned, 0 New; current omits two STIG scans → 90 Not re-scanned, 0 Resolved; current with every result set to pass → 322 Resolved.
+**Acceptance on the real session:** same set both sides → every finding Persisting; current adds STIG scans → their findings Newly scanned, none New; current omits STIG scans → their findings Not re-scanned, none Resolved; current with every result set to pass → every finding Resolved.

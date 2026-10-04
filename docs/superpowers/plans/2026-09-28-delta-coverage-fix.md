@@ -46,4 +46,4 @@ Update existing tests that pinned the old behaviour (`test_empty_current_all_not
 ## 7. Done when
 - `python -m pytest -q -p no:cacheprovider` green; new tests failed before their step and pass after.
 - No `compute_delta` call without explicit coverage anywhere in `app/` or `tests/`.
-- Live acceptance (run by the orchestrator on the real May session, not committed): 322 Persisting / 90 Newly scanned / 90 Not re-scanned / 322 Resolved for the four scenarios in the spec.
+- Live acceptance (run on the maintainer's own scan data, verified locally and never committed): the four scenarios in the spec give the Persisting / Newly scanned / Not re-scanned / Resolved results it states.
