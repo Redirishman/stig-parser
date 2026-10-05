@@ -934,3 +934,60 @@ def test_the_warnings_of_a_successful_run_respect_the_cap(app, monkeypatch, tmp_
     job, _ = _run(app, monkeypatch, parse=many_warnings)
     assert job["status"] == "complete"
     assert job["warnings"] == lines[:200] + ["… and 100 more warnings not shown"]
+
+
+class TestErrorPurgesBeforeStatus:
+    """A poller that sees "error" must never find the job's files still on disk.
+
+    The uploads are scan data: once a job has failed they are useless, and the
+    client is told the job is over the moment the status flips. Purging after
+    the status is set left a window (and, for unexpected errors, left the files
+    until the hourly sweep).
+    """
+
+    @staticmethod
+    def _spy_on_error_status(monkeypatch):
+        import app.web as web
+
+        seen: dict[str, bool] = {}
+        real_set_job = web._set_job
+
+        def spy(job_id, **fields):
+            if fields.get("status") == "error":
+                seen["dir_existed_when_error_was_reported"] = web._job_dir(job_id).exists()
+            return real_set_job(job_id, **fields)
+
+        monkeypatch.setattr(web, "_set_job", spy)
+        return seen
+
+    def test_pipeline_error_purges_files_before_reporting_error(self, client, monkeypatch):
+        seen = self._spy_on_error_status(monkeypatch)
+        data = {"results": (io.BytesIO(b"<broken"), "bad.xml")}
+        job_id = client.post(
+            "/api/process", data=data, content_type="multipart/form-data"
+        ).get_json()["job_id"]
+
+        assert _wait_for_completion(client, job_id)["status"] == "error"
+        assert seen == {"dir_existed_when_error_was_reported": False}
+
+    def test_unexpected_error_purges_files_before_reporting_error(
+        self, client, tmp_path, monkeypatch
+    ):
+        import app.web as web
+
+        seen = self._spy_on_error_status(monkeypatch)
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(web, "parse_stage", boom)
+        data = {"results": _make_upload(FIXTURES / "scc_results.xml")}
+        job_id = client.post(
+            "/api/process", data=data, content_type="multipart/form-data"
+        ).get_json()["job_id"]
+
+        final = _wait_for_completion(client, job_id)
+        assert final["status"] == "error"
+        assert "boom" not in final["error"]
+        assert seen == {"dir_existed_when_error_was_reported": False}
+        assert not (tmp_path / "jobs" / job_id).exists()
