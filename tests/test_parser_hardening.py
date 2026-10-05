@@ -2,6 +2,8 @@
 mishandle silently."""
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,7 @@ class TestMultipleTestResults:
     parser must report the LAST (post-remediation machine state)."""
 
     def test_uses_last_test_result(self):
-        sr = XCCDFResultsParser().parse(FIXTURES / "openscap_remediation_results.xml")
+        sr = XCCDFResultsParser().read(FIXTURES / "openscap_remediation_results.xml")[0]
         assert sr is not None
         statuses = {r.rule_id: r.status for r in sr.rule_results}
         # telnet rule was remediated: fail in the first TestResult, pass in
@@ -30,7 +32,7 @@ class TestMultipleTestResults:
         ] == "fail"
 
     def test_warns_about_multiple_test_results(self, caplog):
-        XCCDFResultsParser().parse(FIXTURES / "openscap_remediation_results.xml")
+        XCCDFResultsParser().read(FIXTURES / "openscap_remediation_results.xml")[0]
         assert any("2 <TestResult>" in r.message for r in caplog.records)
 
 
@@ -39,11 +41,11 @@ class TestLegacyCklRejection:
     loudly, not parsed into an empty ScanResult."""
 
     def test_returns_none(self):
-        assert XCCDFResultsParser().parse(FIXTURES / "legacy_checklist.ckl.xml") is None
+        assert XCCDFResultsParser().read(FIXTURES / "legacy_checklist.ckl.xml")[0] is None
 
-    def test_warning_points_to_cklb(self, caplog):
-        XCCDFResultsParser().parse(FIXTURES / "legacy_checklist.ckl.xml")
-        assert any(".cklb" in r.message for r in caplog.records)
+    def test_the_reason_points_to_cklb(self):
+        scan, why = XCCDFResultsParser().read(FIXTURES / "legacy_checklist.ckl.xml")
+        assert scan is None and ".cklb" in why
 
 
 class TestPipelineWithCklb:
@@ -140,3 +142,96 @@ class TestPipelineWithNessus:
         servers = {f.server for f in result.findings}
         assert "WIN-SERVER-01" in servers            # CKLB host
         assert "rhel7-lab-01.example.mil" in servers  # .nessus host
+
+
+
+# --- per-row log lines are capped and escaped --------------------------------------------------------
+
+
+def _warnings_from(caplog, logger: str) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == logger and r.levelno >= logging.WARNING]
+
+
+def test_a_checklist_of_50000_rules_without_a_status_logs_five_warnings(tmp_path, caplog):
+    from app.parsers.cklb_parser import CKLBParser
+    rules = [{"group_id": f"V-{i}", "rule_id": f"SV-{i}r1_rule", "status": ""} for i in range(50_000)]
+    path = tmp_path / "blank.cklb"
+    path.write_text(json.dumps({"target_data": {"host_name": "H", "ip_address": "10.0.0.1"},
+                                "stigs": [{"display_name": "X", "rules": rules}]}), encoding="utf-8")
+    with caplog.at_level(logging.DEBUG, logger="app"):
+        result = CKLBParser().read(path)[0]
+    assert result.findings == [] and result.skipped_rules == 50_000     # the operator is told the count
+    rows = [r for r in caplog.records if "has no status" in r.getMessage()]
+    assert len(rows) == 50_000
+    assert len([r for r in rows if r.levelno >= logging.WARNING]) == 5
+
+
+def test_every_kind_of_checklist_row_line_counts_towards_the_five(tmp_path, caplog):
+    from app.parsers.cklb_parser import CKLBParser
+    rules = ([{"status": "open"}] * 3 + [{"group_id": "V-1", "status": ["open"]}] * 3
+             + [{"group_id": "V-2", "status": "weird"}] * 3)
+    stigs = [{"display_name": "X", "rules": rules}] + [{"display_name": "No rules"}] * 3
+    path = tmp_path / "mixed.cklb"
+    path.write_text(json.dumps({"target_data": {"host_name": "H", "ip_address": "10.0.0.1"}, "stigs": stigs}),
+                    encoding="utf-8")
+    with caplog.at_level(logging.DEBUG, logger="app"):
+        CKLBParser().read(path)[0]
+    per_row = ("no group_id/rule_id", "not text", "unrecognised status", "no rules list")
+    lines = [r for r in caplog.records if any(p in r.getMessage() for p in per_row)]
+    assert len(lines) == 12 and len([r for r in lines if r.levelno >= logging.WARNING]) == 5
+
+
+def test_a_newline_in_a_checklist_id_or_status_cannot_start_a_log_line(tmp_path, caplog):
+    from app.parsers.cklb_parser import CKLBParser
+    path = tmp_path / "forged.cklb"
+    path.write_text(json.dumps({"target_data": {"host_name": "H", "ip_address": "10.0.0.1"}, "stigs": [
+        {"display_name": "X", "rules": [{"group_id": "V-1\nFORGED", "status": "odd\nFORGED"}]}]}), encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="app"):
+        CKLBParser().read(path)[0]
+    assert caplog.records and not any("\n" in r.getMessage() for r in caplog.records)
+
+
+def test_xccdf_rule_results_without_a_result_log_five_escaped_warnings(tmp_path, caplog):
+    results = "".join(f"<rule-result idref='SV-{i}r1_rule&#10;FORGED LINE'/>" for i in range(100))
+    path = tmp_path / "no_results.xml"
+    path.write_text(f"<TestResult><target>H</target>{results}"
+                    "<rule-result idref='SV-0r1_rule'><result>fail</result></rule-result></TestResult>",
+                    encoding="utf-8")
+    with caplog.at_level(logging.DEBUG, logger="app"):
+        scan = XCCDFResultsParser().read(path)[0]
+    assert len(scan.rule_results) == 1
+    rows = [r for r in caplog.records if "no <result>" in r.getMessage()]
+    assert len(rows) == 100 and len([r for r in rows if r.levelno >= logging.WARNING]) == 5
+    assert not any("\n" in r.getMessage() for r in caplog.records)
+
+
+def test_nessus_items_with_an_unrecognised_result_log_five_escaped_warnings(tmp_path, caplog):
+    from app.parsers.nessus_parser import NessusComplianceParser
+    item = ("<ReportItem pluginName='x' pluginFamily='Policy Compliance'><cm:compliance-result>ODD&#10;FORGED"
+            "</cm:compliance-result><cm:compliance-check-name>c{0}</cm:compliance-check-name></ReportItem>")
+    path = tmp_path / "odd.nessus"
+    path.write_text("<NessusClientData_v2><Report xmlns:cm='http://www.nessus.org/cm'><ReportHost name='h'>"
+                    + "".join(item.format(i) for i in range(100)) + "</ReportHost></Report></NessusClientData_v2>",
+                    encoding="utf-8")
+    with caplog.at_level(logging.DEBUG, logger="app"):
+        findings = NessusComplianceParser().read(path)[0]
+    assert len(findings) == 100 and all(f.status == "Unknown" for f in findings)
+    rows = [r for r in caplog.records if "unrecognised result" in r.getMessage()]
+    assert len(rows) == 100 and len([r for r in rows if r.levelno >= logging.WARNING]) == 5
+    assert not any("\n" in r.getMessage() for r in caplog.records)
+
+
+def test_nessus_hosts_without_a_name_log_five_warnings(tmp_path, caplog):
+    from app.parsers.nessus_parser import NessusComplianceParser
+    host = ("<ReportHost><ReportItem pluginName='x' pluginFamily='Policy Compliance'>"
+            "<cm:compliance-result>FAILED</cm:compliance-result>"
+            "<cm:compliance-check-name>c{0}</cm:compliance-check-name></ReportItem></ReportHost>")
+    path = tmp_path / "nameless.nessus"
+    path.write_text("<NessusClientData_v2><Report xmlns:cm='http://www.nessus.org/cm'>"
+                    + "".join(host.format(i) for i in range(100)) + "</Report></NessusClientData_v2>",
+                    encoding="utf-8")
+    with caplog.at_level(logging.DEBUG, logger="app"):
+        findings = NessusComplianceParser().read(path)[0]
+    assert len(findings) == 100 and {f.server for f in findings} == {"nameless"}
+    rows = [r for r in caplog.records if "ReportHost with no name" in r.getMessage()]
+    assert len(rows) == 100 and len([r for r in rows if r.levelno >= logging.WARNING]) == 5

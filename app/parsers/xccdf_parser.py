@@ -6,7 +6,8 @@ from pathlib import Path
 
 from lxml import etree
 
-from app.parsers.base import BaseParser, RuleResult, ScanResult
+from app.parsers.base import BaseParser, RowLog, RuleResult, ScanResult
+from app.reference.normalize import error_text, safe_name
 from app.utils.scanner_detect import detect_scanner
 
 log = logging.getLogger(__name__)
@@ -168,16 +169,26 @@ def _get_benchmark_attrs(root: etree._Element) -> tuple[str, str]:
 class XCCDFResultsParser(BaseParser):
     """Parse XCCDF 1.2 results files from all supported scanners."""
 
-    def parse(self, path: Path) -> ScanResult | None:
-        """Parse an XCCDF results file and return a ScanResult.
+    def read(
+        self, path: Path, *, name: str | None = None, tree: etree._ElementTree | None = None,
+    ) -> tuple[ScanResult | None, str]:
+        """Parse an XCCDF results file: ``(scan, "")``, or ``(None, why)`` when it
+        cannot be parsed, *why* fit for the operator's warning. What it returns
+        is not logged: the caller reports it (detail the caller is not given,
+        such as a host name taken from the file name, is logged here).
 
-        Returns None if the file cannot be parsed; logs a warning.
+        *name* is what to call the file in messages (and what to fall back on
+        for the host name) when that is not the path's own name: an archive
+        member is extracted under a generated file name. *tree*, when given, is
+        the file already parsed (by :func:`app.parsers.benchmark_parser.load_xml`):
+        it is not parsed again.
         """
-        try:
-            tree = _safe_xml_parse(path)
-        except etree.XMLSyntaxError as exc:
-            log.warning("Skipping %s — invalid XML: %s", path.name, exc)
-            return None
+        name = name or path.name
+        if tree is None:
+            try:
+                tree = _safe_xml_parse(path)
+            except etree.XMLSyntaxError as exc:
+                return None, f"invalid XML: {error_text(exc)}"
 
         document_root = tree.getroot()
 
@@ -185,18 +196,15 @@ class XCCDFResultsParser(BaseParser):
         # parsing it here would silently yield 0 rule-results. Fail loud with
         # a pointer to the supported route instead.
         if etree.QName(document_root.tag).localname == "CHECKLIST":
-            log.warning(
-                "%s is a STIG Viewer .ckl checklist, not XCCDF results. "
-                "Export the checklist as CKLB (STIG Viewer 3) and upload the "
-                ".cklb file instead.",
-                path.name,
+            return None, (
+                "a STIG Viewer .ckl checklist, not XCCDF results; save it as .cklb in STIG Viewer 3 "
+                "and upload that"
             )
-            return None
 
-        scanner = detect_scanner(path)
+        scanner = detect_scanner(path, name, tree=tree)
         # XCCDF target/result data lives inside <TestResult> — locate it whether
         # it is the root element or nested inside a <Benchmark>
-        root = _find_test_result(document_root, path.name)
+        root = _find_test_result(document_root, name)
 
         # Hostname: <target> → <target-facts> host_name/fqdn → <title> → filename stem
         hostname = (
@@ -205,11 +213,11 @@ class XCCDFResultsParser(BaseParser):
             or _find_text(root, "title")
         )
         if not hostname:
-            hostname = path.stem
+            hostname = Path(name).stem
             log.warning(
                 "%s: No hostname found in <target>, <target-facts>, or <title>"
                 " — using filename '%s'",
-                path.name,
+                name,
                 hostname,
             )
 
@@ -225,39 +233,29 @@ class XCCDFResultsParser(BaseParser):
             log.warning(
                 "%s: No IP address found in <target-address> or <target-facts>"
                 " — using 'N/A'",
-                path.name,
+                name,
             )
 
         benchmark_href, benchmark_id = _get_benchmark_attrs(root)
 
         rule_results: list[RuleResult] = []
+        row_log = RowLog(log)
         for rr_el in _findall_results(root):
             rule_id = rr_el.get("idref", "").strip()
             if not rule_id:
                 continue
             status = _find_child_text(rr_el, "result")
             if not status:
-                log.warning(
-                    "%s: rule-result '%s' has no <result> element — skipping",
-                    path.name,
-                    rule_id,
-                )
+                row_log("%s: rule-result '%s' has no <result> element — skipping", name, safe_name(rule_id))
                 continue
             rule_results.append(RuleResult(rule_id=rule_id, status=status))
 
-        if not rule_results:
-            log.warning(
-                "%s: 0 <rule-result> elements found — file may not be an XCCDF "
-                "results file, or may use an unrecognised structure",
-                path.name,
-            )
-
         return ScanResult(
-            source_file=path.name,
+            source_file=name,
             hostname=hostname,
             ip_address=ip_address,
             benchmark_href=benchmark_href,
             benchmark_id=benchmark_id,
             scanner=scanner,
             rule_results=rule_results,
-        )
+        ), ""

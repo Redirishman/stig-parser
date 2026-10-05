@@ -9,19 +9,27 @@ Coverage is passed in, never derived from the finding lists: a finding list
 is actionable-only, so a host or STIG with nothing left open is invisible in
 it, and a STIG that was not re-scanned looks identical to one that was fully
 remediated. ``parse_stage`` builds coverage from every parsed row before the
-actionable filter, plus one pair per XCCDF scan file (see
-``app.processors.matcher.scan_coverage``).
+actionable filter, plus one pair per XCCDF scan file
+(``app.processors.matcher.scan_coverage_pairs``), plus every title that
+reference enrichment gave a finding. A scan no benchmark names has a blank
+title, unless enrichment titled every one of its actionable findings: it then
+covers those titles. ``coverage_gaps`` splits the pairs a run lacks into not
+re-scanned, newly scanned, and those that cannot be verified because a run
+scanned the host with no STIG title.
 
 Identity within a common host is a two-pass match (see ``_match_two_pass``):
 findings are matched on ``vuln_id`` where both sides have one, then leftovers
 are matched on the ``rule_id`` stem. ``vuln_id`` is stable across DISA
-benchmark revisions where ``rule_id`` is not, but ``vuln_id`` is blank
-whenever a rule couldn't be matched to a benchmark, or the source carries no
-V-ID at all — and one run can have broader benchmark coverage than the other
-(e.g. ``--benchmarks`` supplied for only one side), so a single-key scheme
-keyed on "vuln_id-or-rule_id" is not reliable. Hostnames are matched
-case/whitespace-insensitively (``_host_key``); STIG titles are matched on an
-edition-neutral key (``_stig_key``).
+benchmark revisions where ``rule_id`` is not, but ``vuln_id`` is blank when
+neither the scan's own benchmark nor a supplied reference gives one, or the
+source carries no V-ID at all — and one run can have broader benchmark
+coverage than the other (one run's scans embed their benchmark, the other's
+do not), so a single-key scheme keyed on "vuln_id-or-rule_id" is not
+reliable. Both runs must be parsed with the same references, so a rule is
+filled and titled alike in each (the CLI applies ``--references`` to both).
+Hostnames are matched case/whitespace-insensitively (``_host_key``); STIG
+titles are matched on an edition-neutral key (``_stig_key``). Each row
+carries the ``stig_id`` and ``text_source`` of the finding it was built from.
 """
 from __future__ import annotations
 
@@ -31,6 +39,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from app.parsers.base import Finding
+from app.reference.normalize import escape_controls
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +74,8 @@ class DeltaFinding:
     delta_status: str      # one of DELTA_STATUSES
     baseline_status: str   # "" for New / Newly scanned
     current_status: str    # "" for Resolved / Not re-scanned
+    stig_id: str = ""      # as on the Finding the row was built from
+    text_source: str = ""  # where that Finding's check/fix text came from
 
 
 @dataclass
@@ -108,6 +119,8 @@ def _tag(
         delta_status=delta_status,
         baseline_status=baseline_status,
         current_status=current_status,
+        stig_id=f.stig_id,
+        text_source=f.text_source,
     )
 
 
@@ -248,7 +261,7 @@ def _build_index(
                 f"{f.vuln_id or f.rule_id} — keeping the first; the scan "
                 "set may contain overlapping result files."
             )
-            log.warning(msg)
+            log.warning("%s", escape_controls(msg))
             warnings.append(msg)
             dropped.add(i)
             continue
@@ -275,7 +288,7 @@ def _match_two_pass(
     ``(host, rule stem)``; a blank ``rule_id`` is never matched.
 
     This tolerates the same finding being keyed on ``vuln_id`` in one run
-    and ``rule_id`` in the other, e.g. because ``--benchmarks`` was
+    and ``rule_id`` in the other, e.g. because references were
     supplied for only one of the two runs. A single-key scheme
     (``vuln_id or rule_id``) fails that case: the finding gets a different
     key in each run and looks like it Resolved in baseline and is brand
@@ -315,13 +328,6 @@ def _match_two_pass(
     return pairs, unmatched_base, unmatched_curr
 
 
-def _blank_vuln_rate(findings: list[Finding]) -> float:
-    if not findings:
-        return 0.0
-    blank = sum(1 for f in findings if not f.vuln_id)
-    return blank / len(findings)
-
-
 def _index_coverage(
     coverage: Iterable[Pair], raw_host: dict[str, str]
 ) -> dict[tuple[str, str], Pair]:
@@ -346,6 +352,63 @@ def _format_pairs(pairs: set[Pair]) -> str:
     if extra > 0:
         shown.append(f"… and {extra} more (see the Coverage block)")
     return "; ".join(shown)
+
+
+def _tagged_on(result: DeltaResult, pairs: set[Pair], status: str) -> int:
+    """How many of *result*'s findings on *pairs* (by normalised key) carry *status*."""
+    keys = {_pair_key(server, title) for server, title in pairs}
+    return sum(
+        1 for f in result.findings
+        if f.delta_status == status and _pair_key(f.server, f.stig_title) in keys
+    )
+
+
+@dataclass(frozen=True)
+class CoverageGaps:
+    """The pairs of a delta that were not compared, by what can be said of them.
+
+    The warning lines and the workbook's Coverage block both use this one
+    split, so they always name the same pairs under the same meaning.
+    """
+    not_rescanned: set[Pair]    # missing from the current run, which scanned that host titled only, or not at all
+    newly_scanned: set[Pair]    # missing from the baseline, the same way round
+    # Pairs of a host both runs scanned, where one run scanned it with no STIG
+    # title: the pair may well have been re-scanned there, it cannot be shown.
+    unverifiable: set[Pair]
+
+
+def coverage_gaps(result: DeltaResult) -> CoverageGaps:
+    """Split *result*'s not-re-scanned and newly-scanned pairs (see :class:`CoverageGaps`).
+
+    A blank pair is in those sets whenever it is in either coverage: it can
+    never verify a re-scan. When both runs scanned its host it may well have
+    been re-scanned (under no title, or under a title the other run gave it),
+    so it is unverifiable, not "not re-scanned". So is a titled pair missing
+    from a run that scanned its host with no title: that scan may be this
+    STIG. Listed once, by its key.
+
+    A run's untitled pairs are in the set of its own side (a baseline pair is
+    in ``not_rescanned_pairs`` whenever it is blank), which is how the other
+    run's untitled scans of a host are found.
+    """
+    common = {_host_key(host) for host in result.common_hosts}
+    untitled_in_baseline = {_host_key(h) for h, title in result.not_rescanned_pairs if not _stig_key(title)}
+    untitled_in_current = {_host_key(h) for h, title in result.newly_scanned_pairs if not _stig_key(title)}
+
+    def cannot_be_shown(pair: Pair, other_run_untitled: set[str]) -> bool:
+        host = _host_key(pair[0])
+        return host in common and (not _stig_key(pair[1]) or host in other_run_untitled)
+
+    gone = {p: cannot_be_shown(p, untitled_in_current) for p in result.not_rescanned_pairs}
+    new = {p: cannot_be_shown(p, untitled_in_baseline) for p in result.newly_scanned_pairs}
+    unverifiable: dict[tuple[str, str], Pair] = {}
+    for pair in sorted([p for p, unshown in (*gone.items(), *new.items()) if unshown]):
+        unverifiable.setdefault(_pair_key(*pair), pair)
+    return CoverageGaps(
+        not_rescanned={p for p, unshown in gone.items() if not unshown},
+        newly_scanned={p for p, unshown in new.items() if not unshown},
+        unverifiable=set(unverifiable.values()),
+    )
 
 
 def compute_delta(
@@ -448,23 +511,27 @@ def compute_delta(
         else:
             result.findings.append(_tag(f, _NEWLY_SCANNED, "", f.status))
 
-    # If matching still left residual Resolved/New on common hosts *and*
-    # the two runs have different Vuln-ID coverage, that residual is
-    # probably an artifact of asymmetric benchmark matching rather than a
-    # genuine change — flag it so Resolved counts aren't taken at face
-    # value.
+    # Residual Resolved/New on common hosts while the two runs have a
+    # different share of findings without a V-ID: say what was measured.
+    # Only a rule found in both runs with a V-ID in one of them shows that
+    # the runs were given different references; the hint needs that.
     if (resolved or new_common) and base_common and curr_common:
-        b_rate = _blank_vuln_rate(base_common)
-        c_rate = _blank_vuln_rate(curr_common)
-        if b_rate != c_rate:
+        b_blank = sum(1 for f in base_common if not f.vuln_id)
+        c_blank = sum(1 for f in curr_common if not f.vuln_id)
+        one_sided = sum(1 for b, c in pairs if bool(b.vuln_id) != bool(c.vuln_id))
+        if b_blank * len(curr_common) != c_blank * len(base_common) or one_sided:
             msg = (
-                "Baseline and current scans have different Vuln-ID coverage "
-                f"on hosts common to both runs ({b_rate:.0%} vs {c_rate:.0%} "
-                "of findings missing a Vuln-ID) — this usually means "
-                "--benchmarks was supplied for only one run. Resolved/New "
-                "counts on those hosts may be unreliable."
+                f"On hosts in both runs, {b_blank} of {len(base_common)} baseline and "
+                f"{c_blank} of {len(curr_common)} current finding(s) have no V-ID, so "
+                "they were matched by rule ID instead."
             )
-            log.warning(msg)
+            if one_sided:
+                msg += (
+                    f" {one_sided} rule(s) found in both runs have a V-ID in one run "
+                    "only, which usually means the runs were given different STIG "
+                    "references; Resolved/New counts on those hosts may be unreliable."
+                )
+            log.warning("%s", escape_controls(msg))
             warnings.append(msg)
 
     # --- coverage warnings: these must reach the workbook, not just the log
@@ -474,26 +541,45 @@ def compute_delta(
             "All baseline hosts are 'Not re-scanned' and all current hosts "
             "are 'Newly scanned'; nothing was compared."
         )
-        log.warning(msg)
+        log.warning("%s", escape_controls(msg))
         warnings.append(msg)
-    if result.not_rescanned_pairs:
-        n = len(result.not_rescanned_pairs)
+    # One line per kind of gap (see coverage_gaps; the workbook's Coverage
+    # block lists the same pairs). Each line says how many findings it
+    # tagged, and only when any were.
+    gaps = coverage_gaps(result)
+    gone, new = gaps.not_rescanned, gaps.newly_scanned
+    if gone:
+        n = len(gone)
+        tagged = _tagged_on(result, gone, _NOT_RESCANNED)
+        why = (
+            f" — {tagged} finding(s) on them are tagged 'Not re-scanned', never "
+            "Resolved, since resolution cannot be inferred for a scan nobody re-ran"
+        ) if tagged else ""
         msg = (
-            f"{n} baseline host/STIG pair(s) were not re-scanned in the "
-            "current set — their findings are tagged 'Not re-scanned', never "
-            "Resolved, since resolution cannot be inferred for a scan nobody "
-            f"re-ran: {_format_pairs(result.not_rescanned_pairs)}"
+            f"{n} baseline host/STIG pair(s) were not re-scanned in the current "
+            f"set{why}: {_format_pairs(gone)}"
         )
-        log.warning(msg)
+        log.warning("%s", escape_controls(msg))
         warnings.append(msg)
-    if result.newly_scanned_pairs:
-        n = len(result.newly_scanned_pairs)
+    if new:
+        n = len(new)
+        tagged = _tagged_on(result, new, _NEWLY_SCANNED)
+        why = (
+            f" — {tagged} finding(s) on them are tagged 'Newly scanned', never New, "
+            "since there is nothing to compare them against"
+        ) if tagged else ""
         msg = (
-            f"{n} current host/STIG pair(s) have no baseline scan — their "
-            "findings are tagged 'Newly scanned', never New, since there is "
-            f"nothing to compare them against: {_format_pairs(result.newly_scanned_pairs)}"
+            f"{n} current host/STIG pair(s) have no baseline scan{why}: "
+            f"{_format_pairs(new)}"
         )
-        log.warning(msg)
+        log.warning("%s", escape_controls(msg))
+        warnings.append(msg)
+    if gaps.unverifiable:
+        msg = (
+            f"{len(gaps.unverifiable)} host/STIG pair(s) cannot be verified as re-scanned, because "
+            f"a run scanned the host with no STIG title: {_format_pairs(gaps.unverifiable)}"
+        )
+        log.warning("%s", escape_controls(msg))
         warnings.append(msg)
     # A scan that could not be matched to a benchmark has no STIG title, so
     # every such STIG on a host shares one coverage pair and a STIG not
@@ -517,13 +603,35 @@ def compute_delta(
     blank_title_hosts = [blank_hosts[hk] for hk in sorted(blank_hosts)]
     if blank_title_hosts:
         n = len(blank_title_hosts)
-        msg = (
-            f"{n} host(s) have scans with no STIG title (the scan could not be "
-            "matched to a benchmark), so their findings cannot be verified as "
-            "re-scanned and are tagged Not re-scanned / Newly scanned; supply "
-            "--benchmarks for both sets: " + ", ".join(blank_title_hosts)
+        # Tagged for it: untitled findings, and titled ones on pairs that cannot be verified.
+        unverifiable_keys = {_pair_key(*pair) for pair in gaps.unverifiable}
+        tagged = sum(
+            1 for f in result.findings
+            if f.delta_status in (_NOT_RESCANNED, _NEWLY_SCANNED)
+            and (not _stig_key(f.stig_title) or _pair_key(f.server, f.stig_title) in unverifiable_keys)
         )
-        log.warning(msg)
+        head = f"{n} host(s) have scans with no STIG title (the scan could not be matched to a benchmark)"
+        if tagged:
+            said = (
+                f", so {tagged} finding(s) there with no match in the other run cannot be "
+                "verified as re-scanned and are tagged Not re-scanned / Newly scanned;"
+            )
+        else:
+            said = "; no finding was tagged for it —"
+        if any(_stig_key(title) for _host, title in gaps.unverifiable):
+            # A titled pair is unverifiable only because the other run scanned the host
+            # with no title at all: that file had no row a reference could title (every
+            # rule passed, or none is in the reference). A reference cannot name it; its
+            # own benchmark can.
+            advice = (
+                "a results file with no benchmark of its own is named only through rows a "
+                "reference titles; to name its coverage, give it its benchmark (an SCC results "
+                "file that embeds it, or the matching benchmark as a reference)"
+            )
+        else:
+            advice = "supply the STIG as a reference for both runs"
+        msg = f"{head}{said} {advice}: " + ", ".join(blank_title_hosts)
+        log.warning("%s", escape_controls(msg))
         warnings.append(msg)
 
     result.findings.sort(

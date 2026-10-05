@@ -9,7 +9,9 @@ simple cases where every scanned pair still has at least one finding.
 """
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -598,11 +600,14 @@ class TestAsymmetricBenchmarkCoverage:
         # Vuln-ID coverage (100% blank in baseline, 0% in current) -- this
         # is exactly the condition under which the coverage-mismatch
         # warning should fire, so the operator knows to double-check
-        # SV-2_rule's "Resolved" classification.
-        assert any(
-            "vuln-id coverage" in w.lower() or "benchmark" in w.lower()
-            for w in result.warnings
-        )
+        # SV-2_rule's "Resolved" classification. SV-1_rule is in both runs
+        # with a V-ID in one only: that is what supports the hint.
+        assert [w for w in result.warnings if "V-ID" in w] == [
+            "On hosts in both runs, 2 of 2 baseline and 0 of 2 current finding(s) have no V-ID, "
+            "so they were matched by rule ID instead. 1 rule(s) found in both runs have a V-ID in "
+            "one run only, which usually means the runs were given different STIG references; "
+            "Resolved/New counts on those hosts may be unreliable."
+        ]
 
 
 class TestDeterministicOrdering:
@@ -655,29 +660,31 @@ class TestBlankStigTitleCoverage:
         # so every such STIG on a host shares ONE coverage pair — a STIG not
         # re-scanned there cannot be told apart from one fully remediated.
         # The delta fails closed (see TestBlankStigTitleFailsClosed) and
-        # the operator is told to supply --benchmarks.
+        # the operator is told to supply the STIG as a reference.
         base = [_finding("V-1", "HOST-A", stig_title="")]
         curr = [_finding("V-1", "HOST-A", stig_title="")]
         result = compute_delta(
             base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
         )
         assert any(
-            "no stig title" in w.lower() and "HOST-A" in w and "--benchmarks" in w
+            "no stig title" in w.lower() and "HOST-A" in w and "as a reference for both runs" in w
             for w in result.warnings
         ), result.warnings
 
     def test_blank_title_warning_says_findings_are_tagged_not_rescanned(self):
         # The warning must say what the report did about it, not hint that
-        # a Resolved count "may" be wrong.
-        base = [_finding("V-1", "HOST-A", stig_title="")]
+        # a Resolved count "may" be wrong: here V-2 is gone from the current
+        # run and could not be shown re-scanned. (When every row matched, it
+        # claims no tagging: see test_reference_pipeline.)
+        base = [_finding("V-1", "HOST-A", stig_title=""), _finding("V-2", "HOST-A", stig_title="")]
         curr = [_finding("V-1", "HOST-A", stig_title="")]
         result = compute_delta(
             base, curr, baseline_coverage=cov(base), current_coverage=cov(curr)
         )
         assert any(
-            "cannot be verified as re-scanned" in w
+            "1 finding(s) there with no match in the other run cannot be verified as re-scanned" in w
             and "Not re-scanned / Newly scanned" in w
-            and "--benchmarks for both sets" in w
+            and "supply the STIG as a reference for both runs" in w
             and "HOST-A" in w
             for w in result.warnings
         ), result.warnings
@@ -853,11 +860,30 @@ class TestBlankStigTitleFailsClosed:
         assert [f.vuln_id for f in buckets["Not re-scanned"]] == ["V-2"]
         assert result.not_rescanned_pairs == {("HOST-A", "")}
         assert result.newly_scanned_pairs == {("HOST-A", "")}
+        # Both runs scanned HOST-A under no title: the pair cannot be verified,
+        # which is not the same as "not re-scanned".
         assert any(
-            "1 baseline host/STIG pair(s) were not re-scanned" in w
+            "1 host/STIG pair(s) cannot be verified as re-scanned, because a run scanned "
+            "the host with no STIG title" in w
             and "HOST-A / (no STIG title)" in w
             for w in result.warnings
         ), result.warnings
+        assert not any("were not re-scanned" in w for w in result.warnings), result.warnings
+
+    def test_an_untitled_pair_of_a_host_the_other_run_lacks_was_not_re_scanned(self):
+        # HOST-B is not in the current run at all: its blank pair was genuinely not
+        # re-scanned, and HOST-A's (in both runs) cannot be verified.
+        base = [_finding("V-1", "HOST-A", stig_title=""), _finding("V-2", "HOST-B", stig_title="")]
+        curr = [_finding("V-1", "HOST-A", stig_title="")]
+        result = compute_delta(base, curr, baseline_coverage=cov(base), current_coverage=cov(curr))
+        lines = [w for w in result.warnings if "re-scanned" in w and "/ (no STIG title)" in w]
+        assert lines == [
+            "1 baseline host/STIG pair(s) were not re-scanned in the current set — 1 finding(s) on "
+            "them are tagged 'Not re-scanned', never Resolved, since resolution cannot be inferred "
+            "for a scan nobody re-ran: HOST-B / (no STIG title)",
+            "1 host/STIG pair(s) cannot be verified as re-scanned, because a run scanned the host "
+            "with no STIG title: HOST-A / (no STIG title)",
+        ]
 
     def test_titled_pair_on_both_sides_is_not_a_coverage_gap(self):
         # The fix above must not leak into titled pairs: a STIG scanned on
@@ -1034,3 +1060,168 @@ class TestFormatPairsCap:
         assert msg.startswith("21 baseline host/STIG pair(s)")
         assert msg.count("HOST-A / STIG ") == 20
         assert "… and 1 more" in msg
+
+
+def test_delta_rows_carry_stig_id_and_text_source():
+    f = Finding("T", "V-1", "SV-1r1_rule", "CAT I", "Open", "H", "i", "c", "x",
+                stig_id="WN11-00-000150", text_source="Check and fix: scanner")
+    scanned = {("H", "T")}
+    row = compute_delta([f], [f], baseline_coverage=scanned, current_coverage=scanned).findings[0]
+    assert (row.stig_id, row.text_source) == ("WN11-00-000150", "Check and fix: scanner")
+
+
+def test_resolved_and_not_rescanned_rows_carry_the_baseline_fields():
+    # A row with no current counterpart is built from the baseline finding.
+    gone = Finding("T", "V-2", "SV-2r1_rule", "CAT II", "Open", "H", "i", "c", "x",
+                   stig_id="WN11-00-000160", text_source="Check: ref.xml V2R9 | Fix: scanner")
+    other = Finding("T", "V-2", "SV-2r1_rule", "CAT II", "Open", "OLD", "i", "c", "x",
+                    stig_id="WN11-00-000160", text_source="Check and fix: scanner")
+    result = compute_delta([gone, other], [], baseline_coverage={("H", "T"), ("OLD", "T")},
+                           current_coverage={("H", "T")})
+    rows = {(r.server, r.delta_status): (r.stig_id, r.text_source) for r in result.findings}
+    assert rows == {
+        ("H", "Resolved"): ("WN11-00-000160", "Check: ref.xml V2R9 | Fix: scanner"),
+        ("OLD", "Not re-scanned"): ("WN11-00-000160", "Check and fix: scanner"),
+    }
+
+
+class TestAcrossFormatsAndCoverage:
+    """Pins what batch 3 changed about the inputs to compute_delta (plan Amendment 9)."""
+
+    _FIXTURES = Path(__file__).parent / "fixtures"
+    _RULES = (      # V-ID number, revision, STIG ID, severity: the Windows 11 fixtures' rules
+        ("253284", "958928", "WN11-00-000150", "high"),
+        ("253285", "991589", "WN11-00-000160", "medium"),
+        ("253286", "958932", "WN11-00-000170", "low"),
+    )
+
+    def _checklist(self, path: Path, statuses: tuple[str, str, str]) -> Path:
+        """A STIG Viewer 3 checklist of WKSTN-01's Windows 11 STIG, one status per rule of _RULES."""
+        rules = [
+            {
+                "group_id": f"V-{n}", "rule_id_src": f"SV-{n}r{rev}_rule", "rule_version": stig_id,
+                "severity": sev, "check_content": f"Check {n}.", "fix_text": f"Fix {n}.", "status": status,
+            }
+            for (n, rev, stig_id, sev), status in zip(self._RULES, statuses, strict=True)
+        ]
+        path.write_text(json.dumps({
+            "target_data": {"host_name": "WKSTN-01", "ip_address": "10.0.0.21"},
+            "stigs": [{
+                "display_name": "Microsoft Windows 11 STIG",
+                "stig_name": "Microsoft Windows 11 Security Technical Implementation Guide",
+                "stig_id": "MS_Windows_11_STIG", "version": "2",
+                "release_info": "Release: 9 Benchmark Date: 01 Jul 2026", "rules": rules,
+            }],
+        }), encoding="utf-8")
+        return path
+
+    def test_scc_baseline_and_checklist_current_of_one_host_match_as_one_stig(self, tmp_path):
+        """SCC titles the STIG "Microsoft Windows 11 STIG SCAP Benchmark", the checklist
+        "Microsoft Windows 11 STIG": the edition-neutral _stig_key makes them one STIG, so
+        a rule fixed since the baseline is Resolved and nothing reads as not re-scanned."""
+        from app.core.pipeline import parse_stage
+
+        refs = [self._FIXTURES / "manual_stig_win11.xml"]       # the same references for both runs
+        current = self._checklist(tmp_path / "wkstn-01.cklb", ("open", "not_a_finding", "open"))
+        base = parse_stage([self._FIXTURES / "scc_embedded_results.xml"], refs, tmp_path / "b",
+                           allow_empty=True)
+        curr = parse_stage([current], refs, tmp_path / "c", allow_empty=True)
+        assert {f.stig_title for f in base.findings} == {"Microsoft Windows 11 STIG SCAP Benchmark"}
+        assert {f.stig_title for f in curr.findings} == {"Microsoft Windows 11 STIG"}
+
+        result = compute_delta(base.findings, curr.findings,
+                               baseline_coverage=base.coverage, current_coverage=curr.coverage)
+        assert {r.vuln_id: r.delta_status for r in result.findings} == {
+            "V-253284": "Persisting", "V-253285": "Resolved", "V-253286": "Persisting",
+        }
+        assert result.common_hosts == {"WKSTN-01"}
+        assert result.not_rescanned_pairs == set() and result.newly_scanned_pairs == set()
+        assert result.warnings == []
+        # Persisting rows show the current scan's values; the Resolved row the baseline's.
+        rows = {r.vuln_id: (r.stig_id, r.text_source) for r in result.findings}
+        assert rows == {
+            "V-253284": ("WN11-00-000150", "Check and fix: scanner"),
+            "V-253285": ("WN11-00-000160", "Check: manual_stig_win11.xml V2R9, scanned V2R8 | Fix: scanner"),
+            "V-253286": ("WN11-00-000170", "Check and fix: scanner"),
+        }
+
+    # A benchmark-less XCCDF scan titled only by enrichment covers (host, "") from the
+    # scan itself and (host, title) from its titled rows.
+    _TITLED = ("HOST-A", "Win2022 STIG")
+    _BLANK = ("HOST-A", "")
+
+    def test_an_extra_blank_pair_does_not_stop_a_rescanned_stig_from_resolving(self):
+        base = [_finding("V-1", "HOST-A"), _finding("V-2", "HOST-A"), _finding("V-3", "HOST-A", stig_title="")]
+        curr = [_finding("V-1", "HOST-A")]
+        both = {self._TITLED, self._BLANK}
+        result = compute_delta(base, curr, baseline_coverage=both, current_coverage=both)
+        assert {f.vuln_id: f.delta_status for f in result.findings} == {
+            "V-1": "Persisting",
+            "V-2": "Resolved",          # its own (host, STIG) pair was re-scanned
+            "V-3": "Not re-scanned",    # an untitled row can never be shown re-scanned
+        }
+        assert self._TITLED not in result.not_rescanned_pairs | result.newly_scanned_pairs
+
+    def test_a_blank_pair_never_stands_in_for_a_titled_stig(self):
+        # The current set only has the blank pair on HOST-A: the titled STIG was not
+        # shown to be re-scanned, so its rows are Not re-scanned / Newly scanned, never
+        # Resolved / New. A row present on both sides still matches.
+        base = [_finding("V-1", "HOST-A"), _finding("V-2", "HOST-A")]
+        curr = [_finding("V-1", "HOST-A", stig_title=""), _finding("V-9", "HOST-A", stig_title="Edge STIG")]
+        result = compute_delta(
+            base, curr,
+            baseline_coverage={self._TITLED, self._BLANK},
+            current_coverage={self._BLANK, ("HOST-A", "Edge STIG")},
+        )
+        assert {f.vuln_id: f.delta_status for f in result.findings} == {
+            "V-1": "Persisting", "V-2": "Not re-scanned", "V-9": "Newly scanned",
+        }
+        assert self._TITLED in result.not_rescanned_pairs
+        assert ("HOST-A", "Edge STIG") in result.newly_scanned_pairs
+
+
+def test_delta_log_lines_carry_no_raw_line_break(caplog):
+    # Host names and STIG titles come from uploads; compute_delta logs its warnings
+    # itself, one line each. The warnings it returns keep the text (the workbook
+    # neutralises it there).
+    host, title = "HOST\nERROR forged", "Win2022 STIG\r\nWARNING forged"
+    base = [_finding("V-1", host, stig_title=title), _finding("V-1", host, stig_title=title)]
+    with caplog.at_level(logging.WARNING, logger="app.processors.delta"):
+        result = compute_delta(base, [], baseline_coverage={(host, title)}, current_coverage=set())
+    logged = [r.getMessage() for r in caplog.records if r.name == "app.processors.delta"]
+    assert len(logged) == len(result.warnings) >= 3      # duplicate, no common host, not re-scanned
+    assert not any("\n" in m or "\r" in m for m in logged), logged
+    assert any("HOST\\nERROR forged / Win2022 STIG\\r\\nWARNING forged" in m for m in logged), logged
+    assert any(host in w for w in result.warnings)
+
+
+class TestCoverageGaps:
+    """coverage_gaps on its own: which uncompared pair is "not re-scanned" / "newly scanned"
+    and which cannot be verified, on each side."""
+
+    @staticmethod
+    def _gaps(baseline: set, current: set):
+        from app.processors.delta import coverage_gaps
+        return coverage_gaps(compute_delta([], [], baseline_coverage=baseline, current_coverage=current))
+
+    def test_an_untitled_pair_of_a_host_both_runs_scanned_is_unverifiable(self):
+        # The current run scanned HOST-A under the title the baseline also used, and not
+        # untitled: the baseline's untitled scan may be that STIG, so it cannot be verified.
+        gaps = self._gaps({("HOST-A", ""), ("HOST-A", "T1")}, {("HOST-A", "T1")})
+        assert gaps.unverifiable == {("HOST-A", "")}
+        assert gaps.not_rescanned == set() and gaps.newly_scanned == set()
+
+    def test_a_titled_pair_is_unverifiable_when_the_current_run_scanned_its_host_untitled(self):
+        gaps = self._gaps({("HOST-A", "T1")}, {("HOST-A", "")})
+        assert gaps.unverifiable == {("HOST-A", ""), ("HOST-A", "T1")}
+        assert gaps.not_rescanned == set() and gaps.newly_scanned == set()
+
+    def test_a_titled_pair_is_unverifiable_when_the_baseline_scanned_its_host_untitled(self):
+        gaps = self._gaps({("HOST-A", "")}, {("HOST-A", "T2")})
+        assert gaps.unverifiable == {("HOST-A", ""), ("HOST-A", "T2")}
+        assert gaps.not_rescanned == set() and gaps.newly_scanned == set()
+
+    def test_titled_pairs_missing_from_a_run_that_scanned_the_host_titled_are_not_re_scanned(self):
+        gaps = self._gaps({("HOST-A", "T1")}, {("HOST-A", "T2")})
+        assert gaps.not_rescanned == {("HOST-A", "T1")} and gaps.newly_scanned == {("HOST-A", "T2")}
+        assert gaps.unverifiable == set()

@@ -16,6 +16,8 @@ dependencies = [
     "lxml>=6.1.0,<7.0",
     "openpyxl>=3.1,<4.0",
     "boto3>=1.34,<2.0",
+    # urllib3 arrives through botocore; floor 2.8.0: advisories affect every release below it.
+    "urllib3>=2.8.0",
 ]
 
 [project.scripts]

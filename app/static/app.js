@@ -131,8 +131,9 @@
     });
   }
 
-  setupZone(resultsZone, resultsInput, resultsFileList, resultsBrowse, resultsZoneNotice, ['.xml', '.cklb', '.nessus']);
-  setupZone(benchmarksZone, benchmarksInput, benchmarksFileList, benchmarksBrowse, benchmarksZoneNotice, ['.xml', '.zip']);
+  // Either zone takes a ZIP: the server reads it as a folder of files in that zone.
+  setupZone(resultsZone, resultsInput, resultsFileList, resultsBrowse, resultsZoneNotice, ['.xml', '.zip', '.cklb', '.nessus']);
+  setupZone(benchmarksZone, benchmarksInput, benchmarksFileList, benchmarksBrowse, benchmarksZoneNotice, ['.xml', '.zip', '.cklb']);
 
   function updateProcessBtn() {
     const hasResults = resultsInput.files && resultsInput.files.length > 0;

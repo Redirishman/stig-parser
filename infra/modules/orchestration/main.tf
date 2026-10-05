@@ -49,7 +49,7 @@ locals {
         Resource = var.function_arns["parser"]
         # Pass the state input through unchanged: the handlers return their own
         # event, and the next state needs the same {jobId, inputFilenames,
-        # aiEnabled} shape.
+        # referenceFilenames, aiEnabled} shape.
         OutputPath = "$"
         Retry      = local.retry
         Catch      = local.catch

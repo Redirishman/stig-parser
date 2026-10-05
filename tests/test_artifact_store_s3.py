@@ -129,3 +129,15 @@ def test_private_endpoint_url_uses_literal_bucket_host_and_sigv4(monkeypatch):
     assert parsed.netloc == urlparse(PRIVATE_ENDPOINT).netloc
     assert parsed.path == f"/{BUCKET}/jobs/1/input.xml"
     assert parse_qs(parsed.query)["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+
+
+def test_download_to_stops_past_max_bytes(s3_bucket, tmp_path):
+    from app.core.artifact_store import ObjectTooLarge
+    store = S3ArtifactStore(BUCKET, region="us-gov-west-1")
+    store.put_bytes("k/o", b"x" * 2000)
+    dst = tmp_path / "d" / "o"
+    store.download_to("k/o", dst, max_bytes=2000)
+    assert dst.read_bytes() == b"x" * 2000
+    with pytest.raises(ObjectTooLarge):
+        store.download_to("k/o", dst, max_bytes=1999)
+    assert not dst.exists()

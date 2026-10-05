@@ -45,17 +45,21 @@ _NAMESPACE_HINTS: dict[str, str] = {
 _SCC_NAMESPACE = "http://scap.nist.gov/schema/scap/source/1.2"
 
 
-def detect_scanner(path: Path) -> str:
+def detect_scanner(path: Path, name: str | None = None, *, tree: etree._ElementTree | None = None) -> str:
     """Return the scanner name that produced *path*.
 
     Inspects XML namespace declarations and generator metadata.
     Returns one of: "SCC", "OpenSCAP", "Nessus", "Evaluate-STIG", or "Unknown".
+    *name* is what to call the file in log lines when it is not ``path.name``.
+    *tree*, when given, is the file already parsed: it is not parsed again.
     """
-    try:
-        tree = _safe_xml_parse(path)
-    except etree.XMLSyntaxError:
-        log.warning("Cannot detect scanner — invalid XML in %s", path.name)
-        return "Unknown"
+    name = name or path.name
+    if tree is None:
+        try:
+            tree = _safe_xml_parse(path)
+        except etree.XMLSyntaxError:
+            log.warning("Cannot detect scanner — invalid XML in %s", name)
+            return "Unknown"
 
     root = tree.getroot()
 
@@ -98,7 +102,7 @@ def detect_scanner(path: Path) -> str:
         # but this is also valid for Nessus — already handled above
         pass
 
-    log.warning("Could not identify scanner for %s — defaulting to Unknown", path.name)
+    log.warning("Could not identify scanner for %s — defaulting to Unknown", name)
     return "Unknown"
 
 

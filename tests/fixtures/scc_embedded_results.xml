@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fabricated SCC 5.x XCCDF results in the real SCC shape: the Benchmark is the
+  document root, the scanned SCAP benchmark is embedded (fix text and OVAL check
+  references, NO human check text), and the TestResult is nested inside it.
+  Host values are fake. Rule text is representative but synthetic.
+-->
+<cdf:Benchmark xmlns:cdf="http://checklists.nist.gov/xccdf/1.2"
+    id="xccdf_mil.disa.stig_benchmark_Microsoft_Windows_11_STIG" resolved="1" xml:lang="en">
+  <cdf:status date="2026-04-01">accepted</cdf:status>
+  <cdf:title>Microsoft Windows 11 STIG SCAP Benchmark</cdf:title>
+  <cdf:plain-text id="release-info">Benchmark Date: 01 Apr 2026</cdf:plain-text>
+  <cdf:version>002.008</cdf:version>
+
+  <cdf:Group id="xccdf_mil.disa.stig_group_V-253284">
+    <cdf:title>SRG-OS-000480-GPOS-00227</cdf:title>
+    <cdf:Rule id="xccdf_mil.disa.stig_rule_SV-253284r958928_rule" severity="high" weight="10.0">
+      <cdf:version>WN11-00-000150</cdf:version>
+      <cdf:title>Structured Exception Handling Overwrite Protection (SEHOP) must be enabled.</cdf:title>
+      <cdf:fixtext fixref="F-56737r958927_fix">Set the registry value DisableExceptionChainValidation to 0.</cdf:fixtext>
+      <cdf:fix id="F-56737r958927_fix"/>
+      <cdf:check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <cdf:check-content-ref href="U_MS_Windows_11_V2R8_STIG_SCAP_1-3_Benchmark-oval.xml" name="oval:mil.disa.stig.windows11:def:253284"/>
+      </cdf:check>
+    </cdf:Rule>
+  </cdf:Group>
+
+  <cdf:Group id="xccdf_mil.disa.stig_group_V-253285">
+    <cdf:title>SRG-OS-000480-GPOS-00227</cdf:title>
+    <cdf:Rule id="xccdf_mil.disa.stig_rule_SV-253285r958930_rule" severity="medium" weight="10.0">
+      <cdf:version>WN11-00-000160</cdf:version>
+      <cdf:title>The Server Message Block (SMB) v1 protocol must be disabled on the system.</cdf:title>
+      <cdf:fixtext fixref="F-56738r958929_fix">Disable the SMB 1.0/CIFS File Sharing Support feature.</cdf:fixtext>
+      <cdf:fix id="F-56738r958929_fix"/>
+      <cdf:check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <cdf:check-content-ref href="U_MS_Windows_11_V2R8_STIG_SCAP_1-3_Benchmark-oval.xml" name="oval:mil.disa.stig.windows11:def:253285"/>
+      </cdf:check>
+    </cdf:Rule>
+  </cdf:Group>
+
+  <cdf:Group id="xccdf_mil.disa.stig_group_V-253286">
+    <cdf:title>SRG-OS-000480-GPOS-00227</cdf:title>
+    <cdf:Rule id="xccdf_mil.disa.stig_rule_SV-253286r958932_rule" severity="low" weight="10.0">
+      <cdf:version>WN11-00-000170</cdf:version>
+      <cdf:title>The SMB v1 protocol must be disabled on the SMB client.</cdf:title>
+      <cdf:fixtext fixref="F-56739r958931_fix">Configure the policy value for Configure SMB v1 client driver to Disabled.</cdf:fixtext>
+      <cdf:fix id="F-56739r958931_fix"/>
+      <cdf:check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <cdf:check-content-ref href="U_MS_Windows_11_V2R8_STIG_SCAP_1-3_Benchmark-oval.xml" name="oval:mil.disa.stig.windows11:def:253286"/>
+      </cdf:check>
+    </cdf:Rule>
+  </cdf:Group>
+
+  <cdf:Group id="xccdf_mil.disa.stig_group_V-253290">
+    <cdf:title>SRG-OS-000480-GPOS-00227</cdf:title>
+    <cdf:Rule id="xccdf_mil.disa.stig_rule_SV-253290r958940_rule" severity="medium" weight="10.0">
+      <cdf:version>WN11-00-000200</cdf:version>
+      <cdf:title>Automatic logons must be disabled.</cdf:title>
+      <cdf:fixtext fixref="F-56743r958939_fix">Set AutoAdminLogon to 0.</cdf:fixtext>
+      <cdf:fix id="F-56743r958939_fix"/>
+      <cdf:check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <cdf:check-content-ref href="U_MS_Windows_11_V2R8_STIG_SCAP_1-3_Benchmark-oval.xml" name="oval:mil.disa.stig.windows11:def:253290"/>
+      </cdf:check>
+    </cdf:Rule>
+  </cdf:Group>
+
+  <cdf:TestResult id="xccdf_mil.disa.stig_testresult_scc_1" start-time="2026-01-15T10:00:00" end-time="2026-01-15T10:01:24" test-system="cpe:/a:spawar:scc:5.14.1">
+    <cdf:benchmark href="U_MS_Windows_11_V2R8_STIG_SCAP_1-3_Benchmark.xml" id="xccdf_mil.disa.stig_benchmark_Microsoft_Windows_11_STIG"/>
+    <cdf:title>SCC scan of WKSTN-01</cdf:title>
+    <cdf:target>WKSTN-01</cdf:target>
+    <cdf:target-address>10.0.0.21</cdf:target-address>
+    <cdf:target-address>172.16.5.21</cdf:target-address>
+    <cdf:target-address>fe80::1</cdf:target-address>
+    <cdf:target-facts>
+      <cdf:fact name="urn:scap:fact:asset:identifier:host_name" type="string">WKSTN-01</cdf:fact>
+      <cdf:fact name="urn:scap:fact:asset:identifier:fqdn" type="string">wkstn-01.example.mil</cdf:fact>
+      <cdf:fact name="urn:scap:fact:asset:identifier:ipv4" type="string">10.0.0.21</cdf:fact>
+    </cdf:target-facts>
+    <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-253284r958928_rule" severity="high"><cdf:result>fail</cdf:result></cdf:rule-result>
+    <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-253285r958930_rule" severity="medium"><cdf:result>fail</cdf:result></cdf:rule-result>
+    <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-253286r958932_rule" severity="low"><cdf:result>fail</cdf:result></cdf:rule-result>
+    <cdf:rule-result idref="xccdf_mil.disa.stig_rule_SV-253290r958940_rule" severity="medium"><cdf:result>pass</cdf:result></cdf:rule-result>
+  </cdf:TestResult>
+</cdf:Benchmark>

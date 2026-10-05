@@ -81,6 +81,21 @@ def _reject_upload(fs) -> str | None:
     return reject_size(fs.filename, size)
 
 
+def _saved_name(filename: str, fallback_stem: str) -> str:
+    """The name an upload is saved under, which is the name the operator reads.
+
+    secure_filename's, as long as it keeps the extension: the pipeline routes a
+    ZIP, a checklist or a Nessus scan by its suffix, and secure_filename keeps
+    ASCII only ("отчёт.zip" becomes "zip"). Otherwise *fallback_stem* plus the
+    upload's own extension, which _reject_upload has already allowed.
+    """
+    suffix = Path(filename).suffix.lower()
+    safe = secure_filename(filename)
+    if len(safe) > len(suffix) and safe.lower().endswith(suffix):
+        return safe
+    return fallback_stem + suffix
+
+
 def _job_dir(job_id: str) -> Path:
     return _TEMP_DIR / job_id
 
@@ -186,32 +201,32 @@ def create_app(secret_key: str | None = None) -> Flask:
         results_dir.mkdir(parents=True)
         benchmarks_dir.mkdir(parents=True)
 
-        # Save uploaded files to disk
+        # Save uploaded files to disk, each in a numbered folder of its own: two
+        # uploads may share a name, and one must not overwrite the other. The
+        # file keeps its own name, which is what the operator reads.
         saved_results: list[Path] = []
         saved_benchmarks: list[Path] = []
+        # Saved under a safe name; reported under the operator's own (see classify_inputs).
+        supplied_names: dict[Path, str] = {}
+
+        def _unique_dest(parent: Path, name: str) -> Path:
+            folder = parent / f"{len(saved_results) + len(saved_benchmarks):03d}"
+            folder.mkdir()
+            return folder / name
 
         for f in results_files:
             if f.filename:
-                # Preserve the extension on the fallback name — the pipeline
-                # routes .cklb/.nessus files to their parsers by suffix.
-                lower = f.filename.lower()
-                if lower.endswith(".cklb"):
-                    fallback = "upload.cklb"
-                elif lower.endswith(".nessus"):
-                    fallback = "upload.nessus"
-                else:
-                    fallback = "upload.xml"
-                safe_name = secure_filename(f.filename) or fallback
-                dest = results_dir / safe_name
+                dest = _unique_dest(results_dir, _saved_name(f.filename, "upload"))
                 f.save(str(dest))
                 saved_results.append(dest)
+                supplied_names[dest] = f.filename
 
         for f in benchmark_files:
             if f.filename:
-                safe_name = secure_filename(f.filename) or "benchmark.xml"
-                dest = benchmarks_dir / safe_name
+                dest = _unique_dest(benchmarks_dir, _saved_name(f.filename, "reference"))
                 f.save(str(dest))
                 saved_benchmarks.append(dest)
+                supplied_names[dest] = f.filename
 
         session["job_id"] = job_id
         _set_job(
@@ -226,6 +241,7 @@ def create_app(secret_key: str | None = None) -> Flask:
         t = threading.Thread(
             target=_run_job,
             args=(job_id, saved_results, saved_benchmarks),
+            kwargs={"display_names": supplied_names},
             daemon=True,
         )
         t.start()
@@ -304,7 +320,10 @@ def _raise_if_cancelled(job_id: str) -> None:
         raise _JobCancelled()
 
 
-def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]) -> None:
+def _run_job(
+    job_id: str, results_paths: list[Path], reference_paths: list[Path],
+    display_names: dict[Path, str] | None = None,
+) -> None:
     warnings: list[str] = []
     log_handler = _WarningCollector(warnings)
     logging.getLogger("app").addHandler(log_handler)
@@ -317,15 +336,19 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             _set_job(job_id, progress=msg)
 
         _set_job(job_id, progress="Parsing files…")
+        extract_dir = _job_dir(job_id) / "benchmarks_extracted"
         try:
             result = parse_stage(
                 results_paths,
-                benchmark_paths,
-                _job_dir(job_id) / "benchmarks_extracted",
+                reference_paths,
+                extract_dir,
                 cancel_check=_cancel_check,
                 progress_cb=_progress,
+                display_names=display_names or {},
             )
         except PipelineError as exc:
+            # Its warnings are the diagnosis ("x.ckl: … not supported").
+            log_handler.add_new(exc.warnings)
             # Purge BEFORE reporting: once a poller sees "error" the uploaded
             # scan files must already be gone.
             _purge_job_files(job_id)
@@ -336,13 +359,19 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
                 warnings=list(warnings),
             )
             return
+        finally:
+            # Archive members are needed only while parsing, and a run may
+            # extract gigabytes: never keep them until download or the sweep.
+            shutil.rmtree(extract_dir, ignore_errors=True)
 
-        warnings.extend(result.warnings)
+        # Through the collector, as on the failure path: within its cap, and a line
+        # already captured from the log is not shown twice.
+        log_handler.add_new(result.warnings)
 
         _raise_if_cancelled(job_id)
         _set_job(job_id, progress="Generating Excel workbook…", warnings=list(warnings))
         output_path = _job_dir(job_id) / default_output_name()
-        export_stage(result.findings, output_path)
+        export_stage(result.findings, output_path, enrichment=result.enrichment, warnings=result.warnings)
 
         summary = compute_summary(result.findings, result.source_file_count)
 
@@ -372,20 +401,72 @@ def _run_job(job_id: str, results_paths: list[Path], benchmark_paths: list[Path]
             error="Processing failed — see server logs.",
             warnings=list(warnings),
         )
-        _purge_job_files(job_id)
     finally:
         logging.getLogger("app").removeHandler(log_handler)
 
 
+_MAX_COLLECTED = 200     # log warnings shown for one job; the rest are counted
+# Lines counted past the cap whose hash is kept, so that add_new does not count
+# one twice. A flood (90,000 archive entries gave 89,800 lines) is not all kept:
+# past this many, de-duplication stops and the count may over-state, never
+# under-state, how many more there were.
+_MAX_DROPPED_REMEMBERED = 5000
+
+
 class _WarningCollector(logging.Handler):
-    """Captures WARNING+ log messages from app.* loggers into a list."""
+    """Captures WARNING+ log messages from app.* loggers into a list.
+
+    Only those of the thread that made it, the job's worker: every job's
+    collector hangs on the one "app" logger, and one job must never show
+    another's file names. At most _MAX_COLLECTED, then a single line saying
+    how many more there were, kept up to date in place.
+    """
 
     def __init__(self, target: list[str]):
         super().__init__(level=logging.WARNING)
         self._target = target
+        self._thread = threading.get_ident()
+        self._kept = 0
+        self._dropped = 0
+        self._summary_at: int | None = None
+        # What add_new compares against: the lines kept (at most _MAX_COLLECTED)
+        # and a hash of each line counted past the cap, the first
+        # _MAX_DROPPED_REMEMBERED of them. A line whose hash only matches would
+        # have been counted past the cap anyway.
+        self._kept_lines: set[str] = set()
+        self._dropped_hashes: set[int] = set()
 
     def emit(self, record: logging.LogRecord) -> None:
-        self._target.append(self.format(record))
+        # A record without a thread id (logging.logThreads off) cannot be
+        # told apart from another job's: it is not kept.
+        if record.thread != self._thread:
+            return
+        # The message only: format() would append a logged exception's
+        # traceback, which names files and directories on this server.
+        self._add(record.getMessage())
+
+    def add_new(self, lines: list[str]) -> None:
+        """Collect each of *lines* not collected already, kept or counted past
+        the cap, within the same cap."""
+        for line in lines:
+            if line not in self._kept_lines and hash(line) not in self._dropped_hashes:
+                self._add(line)
+
+    def _add(self, line: str) -> None:
+        if self._kept < _MAX_COLLECTED:
+            self._kept += 1
+            self._kept_lines.add(line)
+            self._target.append(line)
+            return
+        self._dropped += 1
+        if len(self._dropped_hashes) < _MAX_DROPPED_REMEMBERED:
+            self._dropped_hashes.add(hash(line))
+        summary = f"… and {self._dropped} more warnings not shown"
+        if self._summary_at is None:
+            self._summary_at = len(self._target)
+            self._target.append(summary)
+        else:
+            self._target[self._summary_at] = summary
 
 
 # ---------------------------------------------------------------------------

@@ -260,3 +260,45 @@ describe('App download failures', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/server error/i);
   });
 });
+
+describe('App STIG References zone', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'getConfig').mockResolvedValue(CONFIG);
+  });
+
+  it('labels the reference zone and tells the operator what it adds', async () => {
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: /STIG References/ })).toBeInTheDocument();
+    expect(screen.getByText(/Manual STIG ZIPs add check text/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not needed when uploading SCC result files/)).toBeNull();
+    expect(screen.getByText(/Add the Manual STIG as a reference to include check text/)).toBeInTheDocument();
+  });
+
+  it('sends the reference zone files as the reference hint', async () => {
+    const createUploads = vi
+      .spyOn(api, 'createUploads')
+      .mockResolvedValue({ jobId: 'j1', uploads: [] });
+    vi.spyOn(api, 'startJob').mockResolvedValue({ jobId: 'j1' });
+    vi.spyOn(api, 'getJob').mockResolvedValue({ jobId: 'j1', status: 'running' });
+
+    render(<App />);
+    await userEvent.upload(await screen.findByLabelText(/scan results files/i), new File(['x'], 'scan.xml'));
+    await userEvent.upload(screen.getByLabelText(/stig references files/i), new File(['x'], 'stig.zip'));
+    await userEvent.click(screen.getByRole('button', { name: /^process$/i }));
+
+    await waitFor(() =>
+      expect(createUploads).toHaveBeenCalledWith(['scan.xml', 'stig.zip'], ['stig.zip']),
+    );
+  });
+
+  it('takes a ZIP in either zone and says it is read as a folder', async () => {
+    render(<App />);
+    await userEvent.upload(await screen.findByLabelText(/scan results files/i), new File(['x'], 'scans.zip'));
+    await userEvent.upload(screen.getByLabelText(/stig references files/i), new File(['x'], 'ref.cklb'));
+    expect(screen.getByText('scans.zip')).toBeInTheDocument();
+    expect(screen.getByText('ref.cklb')).toBeInTheDocument();
+    expect(screen.getAllByText(/A ZIP is read as a folder\./)).toHaveLength(2);
+  });
+});

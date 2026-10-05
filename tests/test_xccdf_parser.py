@@ -11,7 +11,7 @@ PARSER = XCCDFResultsParser()
 
 class TestSCCResults:
     def setup_method(self):
-        self.result = PARSER.parse(FIXTURES / "scc_results.xml")
+        self.result = PARSER.read(FIXTURES / "scc_results.xml")[0]
 
     def test_parses_successfully(self):
         assert self.result is not None
@@ -63,7 +63,7 @@ class TestSCCResults:
 
 class TestOpenSCAPResults:
     def setup_method(self):
-        self.result = PARSER.parse(FIXTURES / "openscap_results.xml")
+        self.result = PARSER.read(FIXTURES / "openscap_results.xml")[0]
 
     def test_parses_successfully(self):
         assert self.result is not None
@@ -88,7 +88,7 @@ class TestOpenSCAPResults:
 
 class TestNessusResults:
     def setup_method(self):
-        self.result = PARSER.parse(FIXTURES / "nessus_results.xml")
+        self.result = PARSER.read(FIXTURES / "nessus_results.xml")[0]
 
     def test_parses_successfully(self):
         assert self.result is not None
@@ -112,7 +112,7 @@ class TestNessusResults:
 
 class TestEvaluateSTIGResults:
     def setup_method(self):
-        self.result = PARSER.parse(FIXTURES / "evaluate_stig_results.xml")
+        self.result = PARSER.read(FIXTURES / "evaluate_stig_results.xml")[0]
 
     def test_parses_successfully(self):
         assert self.result is not None
@@ -138,7 +138,7 @@ class TestEdgeCases:
     def test_invalid_xml_returns_none(self, tmp_path):
         bad = tmp_path / "bad.xml"
         bad.write_text("not xml at all <<<", encoding="utf-8")
-        result = PARSER.parse(bad)
+        result = PARSER.read(bad)[0]
         assert result is None
 
     def test_missing_target_uses_filename(self, tmp_path):
@@ -151,7 +151,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "my-server"
 
@@ -166,7 +166,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.ip_address == "N/A"
 
@@ -188,7 +188,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "FACTS-HOST-01"
 
@@ -205,7 +205,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "server.example.com"
 
@@ -223,7 +223,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.ip_address == "172.16.0.50"
 
@@ -242,7 +242,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.ip_address == "192.168.10.5"
 
@@ -260,7 +260,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "EXPLICIT-HOST"
 
@@ -279,7 +279,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "SCC Results: WIN-TITLE-HOST"
 
@@ -293,7 +293,7 @@ class TestEdgeCases:
             '</TestResult>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "last-resort"
 
@@ -324,7 +324,7 @@ class TestEdgeCases:
             '</Benchmark>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "NESTED-HOST"
         assert result.ip_address == "10.20.30.40"
@@ -352,7 +352,7 @@ class TestEdgeCases:
             '</Benchmark>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.hostname == "DEEP-HOST"
         assert len(result.rule_results) == 1
@@ -365,6 +365,6 @@ class TestEdgeCases:
             '<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="b"/>',
             encoding="utf-8",
         )
-        result = PARSER.parse(xml)
+        result = PARSER.read(xml)[0]
         assert result is not None
         assert result.rule_results == []

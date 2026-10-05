@@ -6,8 +6,9 @@ the only module here permitted to import boto3.
 """
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import IO, Any, Protocol, runtime_checkable
 
 import boto3
 from botocore.config import Config
@@ -22,9 +23,33 @@ class ArtifactStore(Protocol):
     def exists(self, key: str) -> bool: ...
     def size(self, key: str) -> int: ...
     def upload_from(self, key: str, path: Path) -> None: ...
-    def download_to(self, key: str, path: Path) -> None: ...
+    def download_to(self, key: str, path: Path, *, max_bytes: int | None = None) -> None: ...
     def presign_get(self, key: str, expires: int = 900) -> str: ...
     def presign_put(self, key: str, expires: int = 900) -> str: ...
+
+
+class ObjectTooLarge(Exception):
+    """An object held more than the bytes a download may take (``max_bytes``)."""
+
+
+_CHUNK = 1024 * 1024
+
+
+def _copy_capped(src: IO[bytes], dst: Path, max_bytes: int) -> None:
+    """Write *src* to *dst*, at most *max_bytes*; past that, remove *dst* and raise
+    ObjectTooLarge. Counted as read, never taken from a size reported earlier."""
+    written = 0
+    try:
+        with dst.open("wb") as out:
+            while chunk := src.read(_CHUNK):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise ObjectTooLarge(f"more than {max_bytes} bytes")
+                out.write(chunk)
+    except ObjectTooLarge:
+        with contextlib.suppress(OSError):
+            dst.unlink(missing_ok=True)
+        raise
 
 
 class LocalArtifactStore:
@@ -62,10 +87,14 @@ class LocalArtifactStore:
     def upload_from(self, key: str, path: Path) -> None:
         self.put_bytes(key, Path(path).read_bytes())
 
-    def download_to(self, key: str, path: Path) -> None:
+    def download_to(self, key: str, path: Path, *, max_bytes: int | None = None) -> None:
         dst = Path(path)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(self.get_bytes(key))
+        if max_bytes is None:
+            dst.write_bytes(self.get_bytes(key))
+            return
+        with self._resolve(key).open("rb") as src:
+            _copy_capped(src, dst, max_bytes)
 
     def presign_get(self, key: str, expires: int = 900) -> str:
         return self._resolve(key).as_uri()
@@ -132,10 +161,18 @@ class S3ArtifactStore:
     def upload_from(self, key: str, path: Path) -> None:
         self._client.upload_file(str(path), self._bucket, key)
 
-    def download_to(self, key: str, path: Path) -> None:
+    def download_to(self, key: str, path: Path, *, max_bytes: int | None = None) -> None:
         dst = Path(path)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        self._client.download_file(self._bucket, key, str(dst))
+        if max_bytes is None:
+            self._client.download_file(self._bucket, key, str(dst))
+            return
+        # Ask for one byte more than allowed: S3 sends no more, and one byte over says too large.
+        body = self._client.get_object(Bucket=self._bucket, Key=key, Range=f"bytes=0-{max_bytes}")["Body"]
+        try:
+            _copy_capped(body, dst, max_bytes)
+        finally:
+            body.close()
 
     def presign_get(self, key: str, expires: int = 900) -> str:
         return self._presign_client.generate_presigned_url(

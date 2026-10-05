@@ -22,6 +22,8 @@ def handler(event: dict, context: object = None) -> dict:
         common.job_store(),
         work_dir=common.work_dir(job_id),
         input_store=common.upload_store(),
+        # The names POST /uploads recorded as STIG references (see api._execution_input).
+        reference_filenames=list(event.get("referenceFilenames") or []),
     )
     if not ok:
         # The stage already recorded a user-safe error on the job record.

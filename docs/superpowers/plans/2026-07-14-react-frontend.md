@@ -223,7 +223,7 @@ playwright-report/
 - [ ] **Step 9: Copy the stylesheet, fonts, and favicon**
 
 ```bash
-cd "G:/AI Apps/STIG Condenser/stig-parser"
+# from the repository root
 mkdir -p frontend/src/styles/fonts frontend/public
 cp app/static/style.css      frontend/src/styles/style.css
 cp app/static/fonts/*        frontend/src/styles/fonts/

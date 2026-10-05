@@ -115,7 +115,7 @@ export default function ResultCard({
 
       {summary ? (
         <dl className="report-summary">
-          <div className="summary-row"><dt>Result files</dt><dd>{summary.files}</dd></div>
+          <div className="summary-row"><dt>Result files read</dt><dd>{summary.files}</dd></div>
           <div className="summary-row"><dt>Hosts</dt><dd>{summary.hosts}</dd></div>
           <div className="summary-row summary-total"><dt>Findings</dt><dd>{summary.findings}</dd></div>
           <div className="summary-row summary-cat">

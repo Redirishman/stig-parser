@@ -37,3 +37,17 @@ def test_keys_are_sandboxed_within_root(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         store.put_bytes("../escape.txt", b"nope")
+
+
+def test_download_to_stops_past_max_bytes_and_leaves_no_file(tmp_path):
+    import pytest
+
+    from app.core.artifact_store import ObjectTooLarge
+    store = LocalArtifactStore(tmp_path / "store")
+    store.put_bytes("k/o", b"x" * 100)
+    dst = tmp_path / "out" / "o"
+    store.download_to("k/o", dst, max_bytes=100)
+    assert dst.read_bytes() == b"x" * 100
+    with pytest.raises(ObjectTooLarge):
+        store.download_to("k/o", dst, max_bytes=99)
+    assert not dst.exists()
